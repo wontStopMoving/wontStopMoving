@@ -23,7 +23,10 @@ import {
   Mail,
   Newspaper,
   Inbox,
-  Gift
+  Gift,
+  BarChart3,
+  Award,
+  LifeBuoy
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
@@ -100,14 +103,17 @@ export function EmployeeLayout({ children, isAdmin = false }: { children: React.
 
   const adminNav: NavItem[] = [
     { label: "Overview", href: "/dashboard/admin", icon: LayoutDashboard },
+    { label: "Insights", href: "/dashboard/admin/insights", icon: BarChart3 },
     { label: "Lead Inbox", href: "/dashboard/admin/leads", icon: Inbox },
     { label: "Sales Call Script", href: "/dashboard/admin/sales-script", icon: PhoneCall },
     { label: "Stripe & Banking", href: "/dashboard/admin/banking", icon: Landmark },
     { label: "Customers", href: "/dashboard/admin/customers", icon: User },
+    { label: "Provider Scorecards", href: "/dashboard/admin/scorecards", icon: Award },
     { label: "Account Activity", href: "/dashboard/admin/activity", icon: Clock },
     { label: "Quotes", href: "/dashboard/admin/quotes", icon: Calculator },
     { label: "Jobs", href: "/dashboard/admin/jobs", icon: Truck },
     { label: "Support", href: "/dashboard/admin/support", icon: MessageSquare },
+    { label: "Service Desk", href: "/dashboard/admin/service", icon: LifeBuoy },
     { label: "Emails", href: "/dashboard/admin/emails", icon: Mail },
     { label: "Blog", href: "/dashboard/admin/blog", icon: Newspaper },
     { label: "Referrals", href: "/dashboard/admin/referrals", icon: Gift },
