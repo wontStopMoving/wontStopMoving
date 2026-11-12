@@ -12,7 +12,7 @@ import { useAuth } from '@/firebase';
 import { useToast } from '@/hooks/use-toast';
 import { apiFetch } from '@/lib/api-client';
 import { REGION_PRESETS, REGISTRY_AREAS } from '@/lib/registry';
-import { CATEGORIES, CATEGORY_LABEL, categoriesOf } from '@/lib/carriers';
+import { CATEGORIES, CATEGORY_COLOR, CATEGORY_LABEL, PARTNER_KEYS, categoriesOf } from '@/lib/carriers';
 import type { Bounds, MapPoint, StateStat } from '@/components/registry/mover-map';
 import { ResearchPanel } from '@/components/agents/research-panel';
 
@@ -22,18 +22,21 @@ type Row = {
   dot: string; mc: string; name: string; dba: string; street: string; city: string; state: string; zip: string; phone: string; email: string; site: string; officer: string; org: string;
   units: number; drivers: number; miles: number; years: number; interstate: boolean; hhgAuth: boolean; broker: boolean; moverScore: number;
   kind: string | null; sosActive: boolean | null; competitorId: string | null; cats?: number; otherCargo?: string;
+  partnerScore?: number; partnerReasons?: string[]; partnerFit?: string | null; partnerFitConfidence?: number | null;
 };
-type ImportStatus = { generatedAt: string; runs: number; sourceUpdatedAt: string | null; schedule: string; nextCheck: string; totals: { rows: number; active: number; movers: number; carriers: number; categories: Record<string, number> }; columns: { added: string[]; removed: string[]; count: number }; dictionary: { name: string; changedAt: string; checkedAt: string; previousName: string | null } | null };
+type ImportStatus = { generatedAt: string; runs: number; sourceUpdatedAt: string | null; schedule: string; nextCheck: string; totals: { rows: number; active: number; movers: number; carriers: number; partners?: number; newPartners?: number; categories: Record<string, number> }; columns: { added: string[]; removed: string[]; count: number }; dictionary: { name: string; changedAt: string; checkedAt: string; previousName: string | null } | null };
 type Rank = { rank: number; of: number; nextUp: { dot: string; name: string; city: string; state: string; units: number; drivers: number; years: number; gap: { units: number; drivers: number; years: number } }[] };
 type Explain = { formula: string; ours: { trucks: number; drivers: number; miles: number; total: number }; rank: number; of: number; nextUp: { dot: string; name: string; city: string; state: string; units: number; drivers: number; years: number; score: { total: number }; need: { points: number; trucks: number; drivers: number } }[]; measures: { label: string; ours: number; rank: number; of: number; leader: number; median: number; unit: string }[]; shares: { authority: number; website: number }; steps: string[] };
 type Result = { needsArea?: boolean; import?: ImportStatus | null; mode: 'national' | 'detailed'; nationalComplete?: boolean | null; explain?: Explain | null; total: number; rows: Row[]; rank: Rank | null; points?: MapPoint[]; totals: { units: number; drivers: number }; updatedAt: string | null; synced: number; jev: boolean; stateStats?: (StateStat & { count: number; updatedAt: string | null })[] };
 
 const KIND_LABEL: Record<string, string> = { local_mover: 'Local mover', van_line: 'Van line', broker: 'Broker', freight: 'Freight', other: 'Not a mover' };
+const FIT_LABEL: Record<string, string> = { moving_help: 'Could do moving work', vehicle_transport: 'Ships cars', linehaul: 'Overflow / long-distance hauling', storage_container: 'Containers & storage', broker: 'Broker (doesn’t haul)', not_fit: 'Not a fit' };
+const FIT_STYLE: Record<string, string> = { moving_help: 'bg-green-100 text-green-800', vehicle_transport: 'bg-green-100 text-green-800', linehaul: 'bg-blue-100 text-blue-800', storage_container: 'bg-blue-100 text-blue-800', broker: 'bg-amber-100 text-amber-800', not_fit: 'bg-red-100 text-red-800' };
 const KIND_STYLE: Record<string, string> = { local_mover: 'bg-green-100 text-green-800', van_line: 'bg-blue-100 text-blue-800', broker: 'bg-amber-100 text-amber-800', freight: 'bg-slate-200 text-slate-700', other: 'bg-red-100 text-red-800' };
 const FOCUS: Record<string, { lat: number; lng: number; zoom: number }> = {
   'bay-area': { lat: 37.65, lng: -122.1, zoom: 9 }, 'puget-sound': { lat: 47.5, lng: -122.3, zoom: 9 }, socal: { lat: 34.0, lng: -118.1, zoom: 9 }, national: { lat: 39.5, lng: -98.5, zoom: 4 },
 };
-const SORTS = { size: 'Biggest overall', units: 'Most trucks', drivers: 'Most drivers', miles: 'Most miles', years: 'Longest in business', newest: 'Newest registered first', name: 'Name A–Z' } as const;
+const SORTS = { score: 'Best partner fit', size: 'Biggest overall', units: 'Most trucks', drivers: 'Most drivers', miles: 'Most miles', years: 'Longest in business', newest: 'Newest registered first', name: 'Name A–Z' } as const;
 const phone = (p: string) => (p.length === 10 ? `(${p.slice(0, 3)}) ${p.slice(3, 6)}-${p.slice(6)}` : p);
 const nice = (s: string) => s.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\b(Llc|Inc)\b/g, w => w.toUpperCase());
 
@@ -108,7 +111,7 @@ function Registry() {
       const res = await fetch(`/api/admin/registry?${p}`, { headers: { Authorization: `Bearer ${await user.getIdToken()}` } });
       if (!res.ok) throw new Error('Export failed.');
       const url = URL.createObjectURL(await res.blob());
-      const a = document.createElement('a'); a.href = url; a.download = `movers-${area}-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+      const a = document.createElement('a'); a.href = url; a.download = `${f.type === 'partners' ? 'partners' : f.type ? 'carriers' : 'movers'}-${area}-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
     } catch (e) { toast({ variant: 'destructive', title: 'Export failed', description: e instanceof Error ? e.message : '' }); }
     finally { setBusy(''); }
   };
@@ -125,14 +128,16 @@ function Registry() {
 
     <div className="flex flex-wrap gap-2 items-center">
       <span className="text-sm font-semibold">Show:</span>
-      <select aria-label="Kind of carrier" className="h-9 border rounded-md px-2 bg-white text-sm font-semibold" value={f.type} onChange={e => { setF({ ...f, type: e.target.value }); setPage(1); }}>
+      <select aria-label="Kind of carrier" className="h-9 border rounded-md px-2 bg-white text-sm font-semibold" value={f.type} onChange={e => { const type = e.target.value; setF({ ...f, type, sort: type === 'partners' ? 'score' : f.sort === 'score' ? 'size' : f.sort }); setPage(1); }}>
         <option value="">Moving companies</option>
+        <option value="partners">Partner shortlist: best partners and agents{data?.import?.totals.partners ? ` (of ${data.import.totals.partners.toLocaleString()})` : ''}</option>
         <optgroup label="Possible partners and agents">{CATEGORIES.filter(c => c.partner && c.key !== 'household').map(c => <option key={c.key} value={c.key}>{c.label}{data?.import?.totals.categories[c.key] ? ` (${data.import.totals.categories[c.key].toLocaleString()})` : ''}</option>)}</optgroup>
         <optgroup label="Other industries">{CATEGORIES.filter(c => !c.partner).map(c => <option key={c.key} value={c.key}>{c.label}{data?.import?.totals.categories[c.key] ? ` (${data.import.totals.categories[c.key].toLocaleString()})` : ''}</option>)}</optgroup>
       </select>
-      {f.type && <p className="text-xs text-muted-foreground">Categories come from the cargo each company lists on its federal filing; many haul several kinds. Private fleets and bus/limo companies are left out.</p>}
+      {f.type === 'partners' && <p className="text-xs text-muted-foreground">Each state’s best 3,000 freight, car-carrier, container, mobile-home and mail carriers (movers aren’t included: they’re in the mover list), scored 0–100 on fleet, years in business, active insured authority, interstate, website and the kind of hauling. AI says how each could work with you.</p>}
+      {f.type && f.type !== 'partners' && <p className="text-xs text-muted-foreground">Categories come from the cargo each company lists on its federal filing; many haul several kinds. Private fleets and bus/limo companies are left out.</p>}
     </div>
-    {f.type && data?.needsArea && <Card className="bg-blue-50 border-blue-200"><CardContent className="p-4 text-sm">There are too many {CATEGORY_LABEL[f.type as keyof typeof CATEGORY_LABEL]?.toLowerCase()} carriers to list nationwide. Pick a state or region, or zoom the map in to a few states. The map’s state totals show the counts everywhere.</CardContent></Card>}
+    {f.type && data?.needsArea && <Card className="bg-blue-50 border-blue-200"><CardContent className="p-4 text-sm">There are too many {f.type === 'partners' ? 'partner candidates' : `${CATEGORY_LABEL[f.type as keyof typeof CATEGORY_LABEL]?.toLowerCase()} carriers`} to list nationwide. Pick a state or region, or zoom the map in to a few states. The map’s state totals show the counts everywhere.</CardContent></Card>}
     {f.type && !data?.import && data && <Card className="bg-amber-50 border-amber-200"><CardContent className="p-4 text-sm">Other carriers appear after the first import of the full DOT census file (it runs every day for the first three days, then weekly).</CardContent></Card>}
 
     {notSynced && <Card className="bg-amber-50 border-amber-200"><CardContent className="p-4 text-sm space-y-2">
@@ -154,7 +159,8 @@ function Registry() {
       <div className="lg:col-span-2 space-y-2">
         <MoverMap points={data?.points || []} stateStats={(data?.stateStats || []) as StateStat[]} focus={focus}
           onBounds={b => { setBounds(b); if (area === 'map') setPage(1); }} onSelect={(dot, state) => setSelected({ dot, state })} onState={s => { setStateTotals(false); chooseArea(s); }} highlight={selected?.dot} stateTotals={stateTotals} />
-        <div className="flex flex-wrap justify-between gap-2 items-center"><p className="text-xs text-muted-foreground">Red: 20+ trucks · Orange: 5–19 · Gray: under 5. The map shows every company in view, anywhere you pan (with your filters); numbers are clusters, zoom in to split them. Pins sit at each company’s ZIP code. {area !== 'map' && `The list below is ${areaLabel}; choose “Whatever the map shows” to list what’s on screen.`}</p><label className="text-xs flex items-center gap-1"><input type="checkbox" checked={stateTotals} onChange={e => setStateTotals(e.target.checked)} />Show state totals instead</label></div>
+        {f.type === 'partners' && <div className="flex flex-wrap gap-3 text-xs" aria-label="Map colors">{PARTNER_KEYS.map(k => <span key={k} className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full" style={{ background: CATEGORY_COLOR[k] }} />{CATEGORY_LABEL[k]}</span>)}</div>}
+        <div className="flex flex-wrap justify-between gap-2 items-center"><p className="text-xs text-muted-foreground">{f.type === 'partners' ? 'Colors: each carrier’s main kind of hauling (above).' : 'Red: 20+ trucks · Orange: 5–19 · Gray: under 5.'} The map shows every company in view, anywhere you pan (with your filters); numbers are clusters, zoom in to split them. Pins sit at each company’s ZIP code. {area !== 'map' && `The list below is ${areaLabel}; choose “Whatever the map shows” to list what’s on screen.`}</p><label className="text-xs flex items-center gap-1"><input type="checkbox" checked={stateTotals} onChange={e => setStateTotals(e.target.checked)} />Show state totals instead</label></div>
       </div>
       {f.type ? <ImportCard status={data?.import || null} busy={busy === 'pdf'} onDictionary={downloadDictionary} /> : <RankCard data={data} areaLabel={areaLabel} rankBy={f.rankBy} setRankBy={v => setF({ ...f, rankBy: v })} onOpen={(dot, state) => setSelected({ dot, state })} />}
     </div>
@@ -167,7 +173,7 @@ function Registry() {
         <Input placeholder="Min trucks" inputMode="numeric" value={f.minUnits} onChange={set('minUnits')} />
         <Input placeholder="Min drivers" inputMode="numeric" value={f.minDrivers} onChange={set('minDrivers')} />
         <Input placeholder="Min years in business" inputMode="numeric" value={f.minYears} onChange={set('minYears')} />
-        <select aria-label="Sort" className="h-10 border rounded-md px-2 bg-white text-sm" value={f.sort} onChange={set('sort')}>{Object.entries(SORTS).map(([k, l]) => <option key={k} value={k}>Sort: {l}</option>)}</select>
+        <select aria-label="Sort" className="h-10 border rounded-md px-2 bg-white text-sm" value={f.sort} onChange={set('sort')}>{Object.entries(SORTS).filter(([k]) => k !== 'score' || f.type === 'partners').map(([k, l]) => <option key={k} value={k}>Sort: {l}</option>)}</select>
         <select aria-label="Interstate" className="h-10 border rounded-md px-2 bg-white text-sm" value={f.interstate} onChange={set('interstate')}><option value="">Local & interstate</option><option value="yes">Interstate only</option><option value="no">In-state only</option></select>
         <select aria-label="Company type" className="h-10 border rounded-md px-2 bg-white text-sm" value={f.kind} onChange={set('kind')}><option value="">Any company type</option><option value="local_mover">Local movers</option><option value="van_line">Van lines</option><option value="local_mover,van_line">Local movers + van lines</option><option value="broker">Brokers</option></select>
         <select aria-label="Business registry" className="h-10 border rounded-md px-2 bg-white text-sm" value={f.sos} onChange={set('sos')}><option value="">Any registry status</option><option value="active">Active with the state</option><option value="inactive">Not active with the state</option></select>
@@ -184,7 +190,9 @@ function Registry() {
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={!!busy || !data?.total} onClick={async () => { if (!confirm(`Add the top ${Math.min(300, data?.total || 0)} of this list to your main competitor list?`)) return; const r = await post({ action: 'track', query: queryObject(), limit: 300, tier: 'challenger' }, 'track'); if (r) { toast({ title: `Added ${r.added} to your main list`, description: r.skipped ? `${r.skipped} were already tracked.` : undefined }); void load(); } }}>{busy === 'track' ? 'Adding…' : 'Track top 300 as main list'}</Button>
           <Button size="sm" variant="outline" disabled={!!busy} onClick={async () => { if (!confirm('Add the 100 biggest movers in the country to your legends list? Brokers and non-movers are left out once AI has sorted them.')) return; const r = await post({ action: 'legends' }, 'legends'); if (r) toast({ title: `Added ${r.added} legends`, description: r.skipped ? `${r.skipped} were already tracked.` : undefined }); }}>{busy === 'legends' ? 'Adding…' : 'Set national top 100 as legends'}</Button>
-          {data?.jev && <Button size="sm" variant="outline" disabled={!!busy || !data?.rows.length} onClick={async () => { const r = await post({ action: 'classify', dots: data!.rows.filter(x => !x.kind).slice(0, 40).map(x => ({ dot: x.dot, state: x.state })) }, 'classify'); if (r) { toast({ title: `AI sorted ${r.classified} companies` }); void load(); } }}>{busy === 'classify' ? 'Sorting…' : 'Sort this page with AI'}</Button>}
+          {f.type === 'partners' && <Button size="sm" disabled={!!busy || !data?.rows.length} onClick={async () => { const pick = data!.rows.filter(x => x.partnerFit !== 'not_fit' && x.partnerFit !== 'broker'); if (!confirm(`Add the ${pick.length} carriers on this page to Agent network → Recruiting? (AI “not a fit” and brokers are skipped.)`)) return; const r = await post({ action: 'recruit', dots: pick.map(x => ({ dot: x.dot, state: x.state })) }, 'recruit'); if (r) toast({ title: `Added ${r.added} to recruiting`, description: r.skipped ? `${r.skipped} were already on the list.` : undefined }); }}>{busy === 'recruit' ? 'Adding…' : 'Add this page to recruiting'}</Button>}
+          {data?.jev && f.type === 'partners' && <Button size="sm" variant="outline" disabled={!!busy || !data?.rows.length} onClick={async () => { const r = await post({ action: 'classify', partners: true, dots: data!.rows.filter(x => !x.partnerFit).slice(0, 40).map(x => ({ dot: x.dot, state: x.state })) }, 'classify'); if (r) { toast({ title: `AI sorted ${r.classified} carriers` }); void load(); } }}>{busy === 'classify' ? 'Sorting…' : 'Ask AI how they could partner'}</Button>}
+          {data?.jev && f.type !== 'partners' && <Button size="sm" variant="outline" disabled={!!busy || !data?.rows.length} onClick={async () => { const r = await post({ action: 'classify', dots: data!.rows.filter(x => !x.kind).slice(0, 40).map(x => ({ dot: x.dot, state: x.state })) }, 'classify'); if (r) { toast({ title: `AI sorted ${r.classified} companies` }); void load(); } }}>{busy === 'classify' ? 'Sorting…' : 'Sort this page with AI'}</Button>}
           <Button size="sm" variant="outline" disabled={!!busy || !data?.total} onClick={exportCsv}>{busy === 'csv' ? 'Exporting…' : 'Export CSV'}</Button>
         </div>
       </div>
@@ -199,7 +207,7 @@ function Registry() {
             <td className="p-3"><p className="font-bold text-primary">{nice(r.dba || r.name)}</p><p className="text-xs text-muted-foreground">{nice(r.city)}, {r.state}{r.site ? ` · ${r.site.replace(/^https?:\/\//, '')}` : ''}</p></td>
             <td className="p-3 font-semibold">{r.units}</td><td className="p-3">{r.drivers}</td><td className="p-3">{r.miles ? r.miles.toLocaleString() : '—'}</td><td className="p-3">{r.years || '—'}</td>
             <td className="p-3 text-xs whitespace-nowrap">{r.interstate ? 'Interstate' : 'In-state'}{r.hhgAuth ? ' · HHG' : ''}{r.mc ? <><br />{r.mc}</> : ''}</td>
-            <td className="p-3">{r.kind ? <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${KIND_STYLE[r.kind]}`}>{KIND_LABEL[r.kind]}</span> : <span className="text-xs text-muted-foreground">—</span>}{r.cats ? <span className="flex flex-wrap gap-1 mt-1">{categoriesOf(r.cats).map(k => <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{CATEGORY_LABEL[k]}</span>)}{r.otherCargo && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{r.otherCargo.toLowerCase()}</span>}</span> : null}{r.sosActive === true && <Badge variant="outline" className="ml-1 text-[10px]">State: active</Badge>}{r.sosActive === false && <Badge variant="outline" className="ml-1 text-[10px] text-red-700">State: inactive</Badge>}</td>
+            <td className="p-3">{r.partnerScore !== undefined && <p className="text-xs mb-1" title={(r.partnerReasons || []).join(', ')}><b className="text-primary">Fit {r.partnerScore}/100</b>{r.partnerFit && <span className={`ml-1 px-2 py-0.5 rounded-full font-semibold ${FIT_STYLE[r.partnerFit]}`}>{FIT_LABEL[r.partnerFit]}</span>}</p>}{r.kind ? <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${KIND_STYLE[r.kind]}`}>{KIND_LABEL[r.kind]}</span> : <span className="text-xs text-muted-foreground">—</span>}{r.cats ? <span className="flex flex-wrap gap-1 mt-1">{categoriesOf(r.cats).map(k => <span key={k} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{CATEGORY_LABEL[k]}</span>)}{r.otherCargo && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700">{r.otherCargo.toLowerCase()}</span>}</span> : null}{r.sosActive === true && <Badge variant="outline" className="ml-1 text-[10px]">State: active</Badge>}{r.sosActive === false && <Badge variant="outline" className="ml-1 text-[10px] text-red-700">State: inactive</Badge>}</td>
             <td className="p-3">{r.competitorId ? <Badge className="text-[10px]">Tracked</Badge> : <Button size="sm" variant="outline" className="h-7 text-xs" disabled={!!busy} onClick={async e => { e.stopPropagation(); setBusy(`track-${r.dot}`); try { await apiFetch(auth, `/api/admin/registry/${r.dot}?state=${r.state}`, { action: 'track', tier: 'challenger' }); toast({ title: `${nice(r.dba || r.name)} added to competitors` }); void load(); } catch (err) { toast({ variant: 'destructive', title: 'That didn’t work', description: err instanceof Error ? err.message : '' }); } finally { setBusy(''); } }}>{busy === `track-${r.dot}` ? '…' : 'Track'}</Button>}</td>
           </tr>)}
           {data && !data.rows.length && <tr><td colSpan={9} className="p-6 text-center text-muted-foreground">No companies match. Try a wider area or fewer filters.</td></tr>}
@@ -219,7 +227,7 @@ function ImportCard({ status, busy, onDictionary, compact }: { status: ImportSta
   const changed = status.columns.added.length + status.columns.removed.length > 0;
   return <Card className="bg-white"><CardContent className={`${compact ? 'p-4' : 'p-5'} text-sm space-y-2`}>
     <p className="font-bold">DOT census file</p>
-    <p className="text-muted-foreground">Imported {new Date(status.generatedAt).toLocaleString()} ({status.totals.rows.toLocaleString()} records, {status.totals.active.toLocaleString()} active, {status.totals.movers.toLocaleString()} household-goods carriers, {status.totals.carriers.toLocaleString()} for-hire carriers). Refresh: {status.schedule}; {status.nextCheck}.</p>
+    <p className="text-muted-foreground">Imported {new Date(status.generatedAt).toLocaleString()} ({status.totals.rows.toLocaleString()} records, {status.totals.active.toLocaleString()} active, {status.totals.movers.toLocaleString()} household-goods carriers, {status.totals.carriers.toLocaleString()} for-hire carriers{status.totals.partners ? `, ${status.totals.partners.toLocaleString()} possible partners` : ''}{status.totals.newPartners ? `, ${status.totals.newPartners.toLocaleString()} of them new since the last import` : ''}). Refresh: {status.schedule}; {status.nextCheck}.</p>
     {changed && <p className="text-amber-800">The DOT changed the file’s columns: {status.columns.added.length ? `added ${status.columns.added.join(', ')}` : ''}{status.columns.added.length && status.columns.removed.length ? '; ' : ''}{status.columns.removed.length ? `removed ${status.columns.removed.join(', ')}` : ''}. Check the data dictionary.</p>}
     {d && <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={onDictionary}>{busy ? 'Downloading…' : 'Download the data dictionary (PDF)'}</Button><span className="text-xs text-muted-foreground">{d.name} · checked {new Date(d.checkedAt).toLocaleDateString()}</span>{fresh && <Badge className="text-[10px]">New version</Badge>}</div>}
   </CardContent></Card>;
@@ -259,7 +267,11 @@ type Detail = {
   kind: string | null; kindLabel: string | null; kindConfidence: number | null; jev: boolean;
   sos: { best: { name: string; status: string; active: boolean | null; entityType: string; formed: string; agent: string; agentAddress: string; id: string; source: string; url: string | null } | null; matches: unknown[]; free: boolean; checkedAt: string | null } | null;
   sosSearchUrl: string; insurance: { type: string; insurer: string; policy: string; coverage: number; effective: string }[]; competitorId: string | null; links: Record<string, string>;
+  web: Web | null; searchReady: boolean; braveReady: boolean;
 };
+type Web = { site: string | null; source: 'email' | 'guess' | 'google' | 'brave' | null; matchedBy: string[]; socials: Record<string, string>; possibleSocials: Record<string, string>; tried: { url: string; source: string; ok: boolean; matchedBy: string[]; error?: string }[]; searched: string[]; checkedAt: string | null };
+const WEB_SOURCE: Record<string, string> = { email: 'their email domain on the federal filing', guess: 'a likely web address from their name', google: 'a Google search', brave: 'a Brave search' };
+const SOCIAL_NAME: Record<string, string> = { facebook: 'Facebook', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube', linkedin: 'LinkedIn', x: 'X', yelp: 'Yelp', google: 'Google', nextdoor: 'Nextdoor', bbb: 'BBB', thumbtack: 'Thumbtack', angi: 'Angi' };
 
 function CompanyPanel({ dot, state, onClose, onChanged }: { dot: string; state: string; onClose: () => void; onChanged: () => void }) {
   const auth = useAuth();
@@ -270,6 +282,16 @@ function CompanyPanel({ dot, state, onClose, onChanged }: { dot: string; state: 
   const url = `/api/admin/registry/${dot}?state=${state}`;
   const load = useCallback(() => apiFetch<Detail>(auth, url).then(setD).catch(e => toast({ variant: 'destructive', title: 'Couldn’t load company', description: e instanceof Error ? e.message : '' })), [auth, url, toast]);
   useEffect(() => { setD(null); void load(); }, [load]);
+  // First open: look up their website and social profiles automatically (cached for 30 days after).
+  const [webBusy, setWebBusy] = useState(false);
+  const findWeb = useCallback(async (refresh: boolean) => {
+    setWebBusy(true);
+    try { const web = await apiFetch<Web>(auth, url, { action: 'web', refresh }); setD(prev => prev ? { ...prev, web } : prev); }
+    catch (e) { toast({ variant: 'destructive', title: 'Website search didn’t finish', description: e instanceof Error ? e.message : '' }); }
+    finally { setWebBusy(false); }
+  }, [auth, url, toast]);
+  const autoRan = useRef('');
+  useEffect(() => { if (d && !d.web && autoRan.current !== url) { autoRan.current = url; void findWeb(false); } }, [d, url, findWeb]);
   const act = async (action: string, extra: Record<string, unknown> = {}, ok?: string) => {
     setBusy(action);
     try { await apiFetch(auth, url, { action, ...extra }); if (ok) toast({ title: ok }); await load(); onChanged(); }
@@ -300,7 +322,7 @@ function CompanyPanel({ dot, state, onClose, onChanged }: { dot: string; state: 
           <Field label="Entity type">{nice(m.org)}</Field><Field label="Company officer">{nice(m.officer)}</Field>
           <Field label="Address">{nice(m.street)}<br />{nice(m.city)}, {m.state} {m.zip}</Field>
           <Field label="Contact">{m.phone && <a className="underline" href={`tel:${m.phone}`}>{phone(m.phone)}</a>}{m.cell && m.cell !== m.phone && <><br />Cell: {phone(m.cell)}</>}{m.email && <><br /><a className="underline break-all" href={`mailto:${m.email}`}>{m.email}</a></>}</Field>
-          <Field label="Website">{m.site ? <a className="underline break-all" href={m.site} target="_blank" rel="noreferrer noopener">{m.site.replace(/^https?:\/\//, '')}</a> : 'Not on file (no company email domain)'}</Field>
+          <Field label="Website">{(m.site || d.web?.site) ? <a className="underline break-all" href={m.site || d.web!.site!} target="_blank" rel="noreferrer noopener">{(m.site || d.web!.site!).replace(/^https?:\/\//, '')}</a> : webBusy ? 'Searching…' : 'None found'}</Field>
           <Field label="In business">{m.years ? `${m.years} years (DOT since ${m.added})` : m.added}</Field>
           <Field label="Fleet">{m.units} power units{m.unitsReported !== m.units ? ` (filed ${m.unitsReported}, likely a typo)` : ''} · {m.trucks} trucks</Field>
           <Field label="Drivers">{m.drivers} ({m.cdl} with CDL)</Field>
@@ -309,6 +331,8 @@ function CompanyPanel({ dot, state, onClose, onChanged }: { dot: string; state: 
           <Field label="Safety rating">{({ S: 'Satisfactory', C: 'Conditional', U: 'Unsatisfactory' } as Record<string, string>)[m.safety] || 'Not rated'}</Field>
           <Field label="Last federal update">{m.updated}</Field>
         </section>
+
+        <WebSection web={d.web} busy={webBusy} searchReady={d.searchReady} braveReady={d.braveReady} onRefresh={() => findWeb(true)} />
 
         <section className="space-y-2 bg-slate-50 rounded-xl p-4">
           <div className="flex justify-between items-center"><p className="font-bold">Company type (AI)</p>{d.jev && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('classify', {}, 'AI sorted this company')}>{busy === 'classify' ? 'Asking AI…' : d.kind ? 'Ask again' : 'Ask AI'}</Button>}</div>
@@ -341,6 +365,22 @@ function CompanyPanel({ dot, state, onClose, onChanged }: { dot: string; state: 
     </div>
     {research && m && <ResearchPanel target={{ key: m.dot, dot: m.dot, state: m.state, name: nice(m.dba || m.name), city: `${nice(m.city)}, ${m.state}` }} onClose={() => setResearch(false)} />}
   </div>;
+}
+
+function WebSection({ web, busy, searchReady, braveReady, onRefresh }: { web: Web | null; busy: boolean; searchReady: boolean; braveReady: boolean; onRefresh: () => void }) {
+  const chips = (socials: Record<string, string>) => <div className="flex flex-wrap gap-2">{Object.entries(socials).map(([k, u]) => <a key={k} href={u} target="_blank" rel="noreferrer noopener" className="text-xs px-2 py-1 rounded-full border bg-white hover:bg-slate-100">{SOCIAL_NAME[k] || k}</a>)}</div>;
+  return <section className="space-y-2 bg-slate-50 rounded-xl p-4">
+    <div className="flex justify-between items-center"><p className="font-bold">Website & social media</p><Button size="sm" variant="outline" disabled={busy} onClick={onRefresh}>{busy ? 'Searching…' : web ? 'Search again' : 'Search now'}</Button></div>
+    {busy && !web ? <p className="text-sm text-muted-foreground">Looking for their website and social profiles…</p> : !web ? null : <>
+      {web.site ? <p className="text-sm"><a className="underline font-semibold break-all" href={web.site} target="_blank" rel="noreferrer noopener">{web.site.replace(/^https?:\/\//, '')}</a> <span className="text-muted-foreground">· found from {WEB_SOURCE[web.source || ''] || 'search'}{web.matchedBy.length ? `; the page shows their ${web.matchedBy.join(', ')}` : ''}</span></p>
+        : <p className="text-sm text-muted-foreground">No website found. Tried {web.tried.length} address{web.tried.length === 1 ? '' : 'es'}{web.searched.length ? ` and searched ${web.searched.join(' and ')}` : ''}; none showed their phone, USDOT number, or name and city.</p>}
+      {Object.keys(web.socials).length ? <div className="space-y-1"><p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Linked from their website</p>{chips(web.socials)}</div>
+        : web.site ? <p className="text-sm text-muted-foreground">Their website doesn’t link to any social profiles.</p> : null}
+      {Object.keys(web.possibleSocials).length > 0 && <div className="space-y-1"><p className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Possible profiles (from search; check it’s them)</p>{chips(web.possibleSocials)}</div>}
+      {web.tried.length > 0 && <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">What was checked</summary><ul className="mt-1 space-y-0.5">{web.tried.map((t, i) => <li key={i}>{t.ok ? '✓' : '✗'} {t.url.replace(/^https?:\/\//, '')} ({t.source}){t.ok ? `: ${t.matchedBy.join(', ')}` : t.error ? `: ${t.error}` : t.matchedBy.length ? `: only ${t.matchedBy.join(', ')}` : ': not them'}</li>)}</ul></details>}
+      <p className="text-xs text-muted-foreground">Checked {web.checkedAt ? new Date(web.checkedAt).toLocaleDateString() : ''}. Sources: email domain, likely addresses{searchReady ? ', Google search' : ''}{braveReady ? ', Brave search' : ''}.</p>
+    </>}
+  </section>;
 }
 
 export default function MoverRegistryPage() { return <EmployeeLayout isAdmin><Registry /></EmployeeLayout>; }
