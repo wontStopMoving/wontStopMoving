@@ -1262,6 +1262,7 @@ test('staff edit move details: admins any move, crew only their own; locked once
   await jobRef.set({ customerId: auth.currentUser.uid, status: 'confirmed', moveDate: '2026-12-19', pickupAddress: '1 Old St', dropoffAddress: '2 New Ave', moveSize: '2br', employeeIds: [], createdAt: Timestamp.now() });
   const crew = await extraUser('crew-member@example.com', 'crew');
   await db.doc(`users/${crew.user.uid}`).set({ role: 'employee', name: 'Casey Crew' });
+  await db.doc(`employees/${crew.user.uid}`).set({ status: 'active' });
   const save = async (token, body) => fetch(`${base}/api/jobs/editable-move/details`, authorized(await token, body));
 
   assert.equal((await save(customerToken, { details: { moveDate: '2026-12-21' } })).status, 403);
@@ -1311,8 +1312,10 @@ test('assignment history: admins assign movers, crew and agents; every change is
   await db.doc(`providers/${mover.user.uid}`).set({ businessName: 'Mo Moving Co', status: 'approved', city: 'San Jose', state: 'CA' });
   const crew = await extraUser('crew2@example.com', 'crew2');
   await db.doc(`users/${crew.user.uid}`).set({ role: 'employee', name: 'Cam Crew', state: 'CA' });
+  await db.doc(`employees/${crew.user.uid}`).set({ status: 'active' });
   const outsider = await extraUser('outsider-crew@example.com', 'outsider');
   await db.doc(`users/${outsider.user.uid}`).set({ role: 'employee', name: 'Not On It' });
+  await db.doc(`employees/${outsider.user.uid}`).set({ status: 'active' });
   const url = `${base}/api/jobs/team-move/assignments`;
   const call = async (token, body) => fetch(url, authorized(await token, body));
   const get = async token => fetch(url, { headers: { Authorization: `Bearer ${await token}` } });
@@ -1699,7 +1702,34 @@ test('feedback: anyone signed in can send; admins and employees review and reply
   assert.equal((await fetch(`${base}/api/app-feedback`, { headers: { Authorization: `Bearer ${customerToken}` } })).status, 403);
   const crew = await extraUser('feedback-crew@example.com', 'feedback-crew');
   await db.doc(`users/${crew.user.uid}`).set({ role: 'employee', name: 'Fay Feedback', email: 'feedback-crew@example.com' });
-  const list = await (await fetch(`${base}/api/app-feedback`, { headers: { Authorization: `Bearer ${await crew.token()}` } })).json();
+  const crewToken = await crew.token();
+  const employee = db.doc(`employees/${crew.user.uid}`);
+  const get = (route, token = crewToken) => fetch(`${base}${route}`, { headers: { Authorization: `Bearer ${token}` } });
+  const leadAction = () => fetch(`${base}/api/admin/leads`, authorized(crewToken, { action: 'claim', id: 'approval-test-lead' }));
+  const updateFeedback = () => send(crewToken, { action: 'update', id, status: 'done' });
+  const routes = ['/api/admin/leads', '/api/app-feedback'];
+  await db.doc('quotes/approval-test-lead').set({ name: 'Approval test lead', status: 'new', createdAt: Timestamp.now() });
+
+  for (const status of [undefined, 'applicant', 'training', 'rejected']) {
+    if (status) await employee.set({ status });
+    for (const route of routes) assert.equal((await get(route)).status, 403, `${status}: ${route}`);
+    assert.equal((await leadAction()).status, 403, status);
+    assert.equal((await updateFeedback()).status, 403, status);
+  }
+  await employee.set({ status: 'training' });
+  assert.equal((await get('/api/training')).status, 200);
+  assert.equal((await send(crewToken, { type: 'idea', message: 'Applicant feedback still works.' })).status, 201);
+  assert.equal((await db.doc(`appFeedback/${id}`).get()).data().status, 'new');
+  for (const route of routes) assert.equal((await get(route, adminToken)).status, 200, route);
+
+  await employee.set({ status: 'active' });
+  const leads = await get('/api/admin/leads');
+  assert.equal(leads.status, 200);
+  assert.ok((await leads.json()).leads.some(lead => lead.id === 'approval-test-lead'));
+  assert.equal((await leadAction()).status, 200);
+  const approvedFeedback = await get('/api/app-feedback');
+  assert.equal(approvedFeedback.status, 200);
+  const list = await approvedFeedback.json();
   assert.ok(list.items.some(i => i.id === id));
   const before = (await db.collection('emailOutbox').get()).size;
   assert.equal((await send(await crew.token(), { action: 'update', id, status: 'planned', reply: 'Thanks! We are improving it this month.' })).status, 200);
@@ -1707,6 +1737,10 @@ test('feedback: anyone signed in can send; admins and employees review and reply
   assert.equal(after.status, 'planned'); assert.equal(after.repliedBy, 'Fay Feedback');
   assert.ok((await db.collection('emailOutbox').get()).size > before);
   assert.equal((await send(customerToken, { action: 'update', id, status: 'done' })).status, 403);
+  await employee.update({ status: 'rejected' });
+  for (const route of routes) assert.equal((await get(route)).status, 403, route);
+  assert.equal((await leadAction()).status, 403);
+  assert.equal((await updateFeedback()).status, 403);
   await deleteApp(crew.app);
 
   const research = (token, body) => fetch(`${base}/api/admin/agents/research`, authorized(token, body));

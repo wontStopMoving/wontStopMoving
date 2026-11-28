@@ -37,16 +37,25 @@ export async function getRole(uid: string): Promise<Role | null> {
   return (snap.data()?.role as Role) ?? "customer";
 }
 
-async function checkRole(user: DecodedIdToken, roles: Role[]) {
+type RoleOptions = { allowUnapprovedEmployee?: boolean };
+
+async function checkRole(user: DecodedIdToken, roles: Role[], options?: RoleOptions) {
   const role = await getRole(user.uid);
   if (!role || !roles.includes(role)) {
     throw new HttpError(403, "Your account doesn't have access to this action.");
   }
+  if (role === "employee" && !options?.allowUnapprovedEmployee) {
+    const employee = await adminDb().doc(`employees/${user.uid}`).get();
+    if (employee.data()?.status !== "active") {
+      throw new HttpError(403, "Your account doesn't have access to this action.");
+    }
+  }
   return { user, role };
 }
 
-export async function requireRole(req: Request, roles: Role[]) {
-  return checkRole(await requireUser(req), roles);
+// Staff access requires approval. Routes for applicants can opt in explicitly.
+export async function requireRole(req: Request, roles: Role[], options?: RoleOptions) {
+  return checkRole(await requireUser(req), roles, options);
 }
 
 /** For server actions, which receive the ID token as an argument. */
