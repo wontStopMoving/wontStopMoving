@@ -247,7 +247,9 @@ test('extra hours: crew requests, customer accepts with the saved card, crew sha
   const created=[], transfers=[]; let decline=false;
   const stripe={
     paymentIntents:{
-      retrieve: async id => id==='pi_extra_orig' ? {id, customer:'cus_extra', payment_method:'pm_extra', setup_future_usage:'off_session'} : {id, latest_charge:'ch_extra_1', status:'succeeded'},
+      retrieve: async id => id==='pi_extra_orig' ? {id, customer:'cus_extra', payment_method:{id:'pm_extra', type:'card'}, setup_future_usage:null, payment_method_options:{card:{setup_future_usage:'off_session'}}}
+        : id==='pi_extra_affirm' ? {id, customer:'cus_extra', payment_method:{id:'pm_affirm', type:'affirm'}, setup_future_usage:null, payment_method_options:{card:{setup_future_usage:'off_session'}}}
+        : {id, latest_charge:'ch_extra_1', status:'succeeded'},
       create: async (params, options) => { if (decline) { const e=new Error('declined'); e.code='card_declined'; throw e; } created.push({params, options}); return {id:'pi_extra_new', status:'succeeded'}; },
     },
     transfers:{ create: async (params, options) => { transfers.push({params, options}); return {id:`tr_extra_${transfers.length}`}; } },
@@ -277,6 +279,12 @@ test('extra hours: crew requests, customer accepts with the saved card, crew sha
   assert.equal(failed.hoursRequest.status,'payment_failed'); assert.equal(failed.hoursReserved,2);
   await extra.respondExtraHours({jobId:'money-extra-b',uid:'money-extra-customer',accept:false});
   assert.equal((await db.doc('jobs/money-extra-b').get()).data().hoursRequest.status,'declined');
+  // Paid with Affirm: nothing reusable to charge, so the customer is sent to support instead.
+  await db.doc('jobs/money-extra-c').set({...base, paymentIntentId:'pi_extra_affirm'});
+  await extra.requestExtraHours({jobId:'money-extra-c',uid:'money-extra-crew',isAdmin:false,hours:3,reason:'Long carry'});
+  const before=created.length;
+  await assert.rejects(()=>extra.respondExtraHours({jobId:'money-extra-c',uid:'money-extra-customer',accept:true}), /financed payments/);
+  assert.equal(created.length,before);
 });
 
 test('Book Now jobs: extra hours work without a cart order, and the base payout excludes extra-hours charges', async () => {

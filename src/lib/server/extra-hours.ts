@@ -46,10 +46,13 @@ export async function requestExtraHours(p: { jobId: string; uid: string; isAdmin
 
 /** The customer's saved card from the job's original payment. */
 async function savedCard(paymentIntentId: string) {
-  const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+  const pi = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ['payment_method'] });
   const customer = typeof pi.customer === 'string' ? pi.customer : pi.customer?.id;
   const paymentMethod = typeof pi.payment_method === 'string' ? pi.payment_method : pi.payment_method?.id;
-  if (!customer || !paymentMethod || pi.setup_future_usage !== 'off_session') return null;
+  // Older bookings saved for every method; newer ones save cards only (Affirm can't be reused).
+  const saved = pi.setup_future_usage === 'off_session' || pi.payment_method_options?.card?.setup_future_usage === 'off_session';
+  const isCard = typeof pi.payment_method === 'string' || pi.payment_method?.type === 'card';
+  if (!customer || !paymentMethod || !saved || !isCard) return null;
   return { customer, paymentMethod };
 }
 
@@ -66,7 +69,7 @@ export async function respondExtraHours(p: { jobId: string; uid: string; accept:
   }
   if (job.status === 'completed' || job.status === 'cancelled' || job.paymentHold) throw new HttpError(409, 'This move can’t be changed now. Contact support.');
   const card = job.paymentIntentId ? await savedCard(job.paymentIntentId) : null;
-  if (!card) throw new HttpError(409, 'There’s no saved card for this booking. Contact support to pay for the extra time.');
+  if (!card) throw new HttpError(409, 'There’s no saved card for this booking (financed payments can’t be charged again). Contact support to pay for the extra time.');
   let intent: { id: string; status?: string | null };
   try {
     intent = await moneyOperation(db, `extra-hours-${p.jobId}-${req.id}`, {

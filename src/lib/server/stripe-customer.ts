@@ -16,4 +16,9 @@ export async function savedCardCustomer(uid: string, email: string | undefined) 
   return id;
 }
 
-export const SAVED_CARD_NOTE = 'Your card is saved securely so you can approve extra hours from the app if your crew needs more time. It is only charged when you tap Accept.';
+export const SAVED_CARD_NOTE = 'If you pay by card, it is saved securely so you can approve extra hours from the app if your crew needs more time. It is only charged when you tap Accept.';
+/**
+ * Save the card for extra hours (#153) without hiding financing: a session-wide
+ * setup_future_usage makes Stripe drop Affirm, which can't be charged again.
+ */
+export const SAVE_CARD_ONLY = { card: { setup_future_usage: 'off_session' as const } };
