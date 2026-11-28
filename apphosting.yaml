@@ -5,6 +5,8 @@ runConfig:
   # Increase this value if you'd like to automatically spin up
   # more instances in response to increased traffic.
   maxInstances: 2
+  # The full mover registry and map share this process with Next.js.
+  memoryMiB: 768
 
 env:
   # Sandbox checkout, independent payouts, review refund and tip checks passed.
