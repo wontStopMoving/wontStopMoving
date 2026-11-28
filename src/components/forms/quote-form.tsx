@@ -95,7 +95,7 @@ export function QuoteForm({ providerId, initialSize }: { providerId?: string; in
   const { user, isUserLoading } = useUser();
   const { toast } = useToast();
 
-  const { register, handleSubmit, setValue, watch, trigger, formState: { errors } } = useForm<FormValues>({
+  const { register, handleSubmit, setValue, watch, trigger, formState: { errors } } = useForm<z.input<typeof formSchema>, unknown, FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       moveSize: initialSize && QUOTE_SIZES.includes(initialSize) ? initialSize : "studio",

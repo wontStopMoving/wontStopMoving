@@ -11,7 +11,7 @@ const compat = new FlatCompat({ baseDirectory: dirname(fileURLToPath(import.meta
  * visible without blocking deploys; tighten them as the code is cleaned up.
  */
 const config = [
-  { ignores: ['.next/**', 'node_modules/**', 'public/**', 'next-env.d.ts', 'tsconfig.tsbuildinfo'] },
+  { ignores: ['.next/**', 'node_modules/**', 'functions/newsletter/lib/**', 'public/**', 'next-env.d.ts', 'tsconfig.tsbuildinfo'] },
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
   {
     rules: {

@@ -15,10 +15,8 @@ import { moverRegion } from '@/lib/server/mover-locations';
 export const revalidate = 3600;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const now = new Date();
   const entry = (path: string, priority: number, changeFrequency: MetadataRoute.Sitemap[number]['changeFrequency'] = 'monthly') => ({
     url: `${SITE_URL}${path}`,
-    lastModified: now,
     changeFrequency,
     priority,
   });
@@ -52,7 +50,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     entry('/accessibility', 0.2, 'yearly'),
     entry('/moving-checklist.pdf', 0.4, 'yearly'),
     entry('/reviews', 0.6, 'weekly'),
-    ...['/llms.txt', '/llms-full.txt', '/pricing.md', '/how-booking-works.md', '/faq.md', '/service-area.md', '/AGENTS.md'].map((p) => entry(p, 0.4)),
+    ...['/home.md', '/llms.txt', '/llms-full.txt', '/pricing.md', '/how-booking-works.md', '/faq.md', '/service-area.md', '/AGENTS.md'].map((p) => entry(p, 0.4)),
   ];
 
   const services = Object.keys(SERVICES).map((slug) => entry(`/services/${slug}`, 0.8));
@@ -61,7 +59,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const date = new Date(post.date);
     return {
       ...entry(`/blog/${post.slug}`, 0.5, 'yearly'),
-      lastModified: isNaN(date.getTime()) ? now : date,
+      ...(Number.isFinite(date.getTime()) && { lastModified: date }),
     };
   });
 
@@ -80,5 +78,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     const region = moverRegion(code);
     return region ? [entry(`/movers/${code}`, 0.7), ...region.cities.map(city => entry(`/movers/${code}/${slugify(city)}`, 0.5))] : [];
   });
-  return [...core, ...services, ...blog, ...places, ...reports, ...moverPlaces];
+  const entries = [...core, ...services, ...blog, ...places, ...reports, ...moverPlaces];
+  return [...new Map(entries.map(entry => [entry.url, entry])).values()];
 }

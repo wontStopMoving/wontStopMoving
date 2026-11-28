@@ -90,6 +90,20 @@ test('marketplace pricing floor, city routes and direct-booking pages stay consi
   assert.doesNotMatch(home,/Track My Move/);
 });
 
+test('sitemap lists each canonical URL once and omits unknown modification dates', async () => {
+  const response = await fetch(`${base}/sitemap.xml`);
+  assert.equal(response.status, 200);
+  const entries = [...(await response.text()).matchAll(/<url>\s*<loc>([^<]+)<\/loc>([\s\S]*?)<\/url>/g)];
+  assert.ok(entries.length > 1000);
+  const pages = new Map(entries.map(([, url, metadata]) => [new URL(url).pathname, metadata]));
+  assert.equal(pages.size, entries.length);
+  for (const path of ['/home.md', '/locations/california/los-angeles', '/movers/ca/los-angeles']) {
+    assert.ok(pages.has(path), path);
+    assert.doesNotMatch(pages.get(path), /<lastmod>/, path);
+  }
+  assert.ok([...pages].some(([path, metadata]) => path.startsWith('/blog/') && metadata.includes('<lastmod>')));
+});
+
 test('Canadian proximity and explicit city coverage exclude distant and unapproved providers', async () => {
   const baseProvider={businessName:'Synthetic Canadian crew',status:'approved',stripeOnboardingComplete:true,stripeAccountId:'acct_qa_canada',hourlyRate:45,minimumHours:2,services:['loading']};
   const near=db.doc('providers/canada-near'),far=db.doc('providers/canada-far'),explicit=db.doc('providers/canada-explicit'),pending=db.doc('providers/canada-pending');

@@ -1,0 +1,22 @@
+{
+  "functions": [
+    {
+      "source": ".",
+      "codebase": "website-newsletters",
+      "runtime": "nodejs22",
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ],
+      "ignore": [
+        "node_modules",
+        "src",
+        "tests",
+        "*.log",
+        "firebase*.json",
+        ".env*.example",
+        "README.md",
+        "ses-newsletter.yaml"
+      ]
+    }
+  ]
+}

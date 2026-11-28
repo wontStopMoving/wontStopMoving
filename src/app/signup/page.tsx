@@ -50,7 +50,7 @@ export default function SignupPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
 
-  const { register, handleSubmit, setValue, getValues, formState: { errors } } = useForm<SignupValues>({
+  const { register, handleSubmit, setValue, getValues, formState: { errors } } = useForm<z.input<typeof signupSchema>, unknown, SignupValues>({
     resolver: zodResolver(signupSchema),
     defaultValues: {
       accountType: 'customer',

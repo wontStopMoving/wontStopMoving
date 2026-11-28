@@ -20,8 +20,8 @@ import { ProviderCityCoverage } from '@/components/dashboard/provider-city-cover
 import { ProviderTextPreferences } from '@/components/dashboard/provider-text-preferences';
 
 const pricingSchema = z.object({
-  hourlyRate: z.coerce.number().finite().min(45, "Minimum rate is $45/hr").max(1000).multipleOf(0.01, 'Use at most two decimal places'),
-  minimumHours: z.coerce.number().int().min(2, "Minimum 2 hours").max(24),
+  hourlyRate: z.coerce.number<string | number>().finite().min(45, "Minimum rate is $45/hr").max(1000).multipleOf(0.01, 'Use at most two decimal places'),
+  minimumHours: z.coerce.number<string | number>().int().min(2, "Minimum 2 hours").max(24),
   services: z.array(z.string()).min(1, "Must select at least one service")
 });
 
@@ -41,7 +41,7 @@ export default function ProviderServicesPage() {
 
   const { data: providerDoc, isLoading } = useDoc(providerRef);
 
-  const form = useForm<PricingFormValues>({
+  const form = useForm<z.input<typeof pricingSchema>, unknown, PricingFormValues>({
     resolver: zodResolver(pricingSchema),
     defaultValues: {
       hourlyRate: 50,
