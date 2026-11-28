@@ -144,7 +144,7 @@ export const servicesLabel = (m: Pick<Mover, 'cats' | 'otherCargo'>) => (m.cats 
 export type LocatedCarrier = { t: CarrierTuple; lat: number | null; lng: number | null };
 export function filterCarriers(
   tuples: CarrierTuple[],
-  f: Pick<MoverFilters, 'q' | 'city' | 'zip' | 'bbox' | 'near' | 'minUnits' | 'maxUnits' | 'minDrivers' | 'minYears' | 'maxYears' | 'addedSince' | 'interstate' | 'hhgAuth' | 'hasEmail' | 'hasSite' | 'noSite'> & { counties?: string[] },
+  f: Pick<MoverFilters, 'q' | 'city' | 'zip' | 'bbox' | 'near' | 'minUnits' | 'maxUnits' | 'minDrivers' | 'minYears' | 'maxYears' | 'addedSince' | 'interstate' | 'hhgAuth' | 'hasEmail' | 'hasSite' | 'noSite' | 'dots' | 'excludeDots'> & { counties?: string[] },
   zipLatLng: (zip: string) => [number, number] | null, now = Date.now(),
 ): LocatedCarrier[] {
   const q = (f.q || '').trim().toUpperCase(), city = (f.city || '').trim().toUpperCase();
@@ -152,6 +152,7 @@ export function filterCarriers(
   const yearsOf = (a: string) => (/^\d{8}$/.test(a) ? Math.floor((now - Date.parse(`${a.slice(0, 4)}-${a.slice(4, 6)}-${a.slice(6, 8)}T00:00:00Z`)) / (365.25 * 86400000)) : null);
   const out: LocatedCarrier[] = [];
   for (const t of tuples) {
+    if ((f.dots && !f.dots.has(t[0])) || f.excludeDots?.has(t[0])) continue;
     if (f.counties && !f.counties.includes(t[5])) continue;
     if (q && !`${t[1]} ${t[2]} ${t[0]} ${t[14]}`.toUpperCase().includes(q)) continue;
     if (city && t[3].toUpperCase() !== city) continue;

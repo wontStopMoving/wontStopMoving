@@ -112,11 +112,18 @@ export function distanceMiles(aLat: number, aLng: number, bLat: number, bLng: nu
 // Region presets (hand-picked regions and every big metro) live in src/lib/regions.ts; filters take the resolved area.
 
 export type SortKey = 'size' | 'units' | 'drivers' | 'miles' | 'years' | 'newest' | 'name' | 'distance' | 'score';
+export type RegistryBounds = { south: number; west: number; north: number; east: number };
+
+export function inRegistryBounds(lat: number | null, lng: number | null, bounds: RegistryBounds) {
+  return lat !== null && lng !== null && lat >= bounds.south && lat <= bounds.north &&
+    ((lng - bounds.west) % 360 + 360) % 360 <= bounds.east - bounds.west;
+}
+
 export type MoverFilters = {
   q?: string; states?: string[]; region?: string; city?: string; zip?: string;
   area?: { states: string[]; counties: string[] }; // The region preset, resolved (src/lib/regions.ts): counties as "ST-ccc".
   near?: { lat: number; lng: number; miles: number };
-  bbox?: { south: number; west: number; north: number; east: number };
+  bbox?: RegistryBounds;
   minUnits?: number; maxUnits?: number; minDrivers?: number; minYears?: number; maxYears?: number; addedSince?: string;
   interstate?: 'yes' | 'no'; hhgAuth?: boolean; likelyOnly?: boolean; hasEmail?: boolean; hasSite?: boolean; noSite?: boolean;
   org?: string; dots?: Set<string>; excludeDots?: Set<string>;
@@ -138,7 +145,7 @@ export function filterMovers(rows: Mover[], f: MoverFilters, now = Date.now()): 
     if (q && !`${m.name} ${m.dba} ${m.dot} ${m.mc} ${m.officer}`.toUpperCase().includes(q) && !(qKey.length >= 3 && (nameKey(m.name).includes(qKey) || nameKey(m.dba).includes(qKey)))) return false;
     if (city && m.city.toUpperCase() !== city) return false;
     if (f.zip && !m.zip.startsWith(f.zip)) return false;
-    if (f.bbox && (m.lat === null || m.lng === null || m.lat < f.bbox.south || m.lat > f.bbox.north || m.lng < f.bbox.west || m.lng > f.bbox.east)) return false;
+    if (f.bbox && !inRegistryBounds(m.lat, m.lng, f.bbox)) return false;
     if (f.near && (m.lat === null || m.lng === null || distanceMiles(f.near.lat, f.near.lng, m.lat, m.lng) > f.near.miles)) return false;
     if (f.minUnits !== undefined && m.units < f.minUnits) return false;
     if (f.maxUnits !== undefined && m.units > f.maxUnits) return false;
@@ -159,8 +166,11 @@ export function filterMovers(rows: Mover[], f: MoverFilters, now = Date.now()): 
   });
 }
 
-export function sortMovers(rows: Mover[], key: SortKey = 'size', near?: { lat: number; lng: number }, now = Date.now()): Mover[] {
-  const by: Record<SortKey, (a: Mover, b: Mover) => number> = {
+export type RankingMover = Pick<Mover, 'dot' | 'name' | 'dba' | 'city' | 'state' | 'units' | 'drivers' | 'miles' |
+  'added' | 'lat' | 'lng' | 'site' | 'hhgAuth'>;
+
+export function sortMovers<T extends RankingMover>(rows: T[], key: SortKey = 'size', near?: { lat: number; lng: number }, now = Date.now()): T[] {
+  const by: Record<SortKey, (a: T, b: T) => number> = {
     size: (a, b) => sizeScore(b) - sizeScore(a),
     units: (a, b) => b.units - a.units || b.drivers - a.drivers,
     drivers: (a, b) => b.drivers - a.drivers || b.units - a.units,
@@ -181,11 +191,11 @@ export type OurFleet = { units: number; drivers: number; miles: number; years: n
  * Where we'd rank among `rows` (already filtered) by `key`, and the
  * companies just above us: the next ones to pass.
  */
-export function ourRank(rows: Mover[], us: OurFleet, key: 'size' | 'units' | 'drivers' | 'miles' = 'size', now = Date.now()) {
+export function ourRank(rows: RankingMover[], us: OurFleet, key: 'size' | 'units' | 'drivers' | 'miles' = 'size', now = Date.now()) {
   const value = (m: Pick<Mover, 'units' | 'drivers' | 'miles'>) => (key === 'size' ? sizeScore(m) : key === 'miles' ? m.miles : saneFleet(m)[key]);
   const ours = value(us);
   const ahead = rows.filter(m => value(m) > ours).sort((a, b) => value(a) - value(b));
-  return { rank: ahead.length + 1, of: rows.length + 1, nextUp: ahead.slice(0, 5), gapTo: (m: Mover) => ({ units: Math.max(0, m.units - us.units + 1), drivers: Math.max(0, m.drivers - us.drivers + 1), years: Math.max(0, yearsInBusiness(m, now) - us.years) }) };
+  return { rank: ahead.length + 1, of: rows.length + 1, nextUp: ahead.slice(0, 5), gapTo: (m: RankingMover) => ({ units: Math.max(0, m.units - us.units + 1), drivers: Math.max(0, m.drivers - us.drivers + 1), years: Math.max(0, yearsInBusiness(m, now) - us.years) }) };
 }
 
 /** Comma-safe CSV of registry rows. */
@@ -225,11 +235,11 @@ export function sizeParts(m: Pick<Mover, 'units' | 'drivers' | 'miles'>) {
 export type UsProfile = OurFleet & { hasAuthority?: boolean; hasWebsite?: boolean };
 
 /** Full, plain explanation of where we rank among `rows` and what moves us up. */
-export function explainRank(rows: Mover[], us: UsProfile, now = Date.now()) {
+export function explainRank(rows: RankingMover[], us: UsProfile, now = Date.now()) {
   const ours = sizeParts(us);
   const ahead = rows.filter(m => sizeScore(m) > sizeScore(us)).sort((a, b) => sizeScore(a) - sizeScore(b));
-  const need = (m: Mover) => { const pts = Math.max(1, Math.ceil(sizeScore(m) - sizeScore(us) + 0.01)); return { points: pts, trucks: Math.ceil(pts / SIZE_WEIGHTS.perTruck), drivers: Math.ceil(pts / SIZE_WEIGHTS.perDriver) }; };
-  const measure = (label: string, ourValue: number, value: (m: Mover) => number, unit = '') => {
+  const need = (m: RankingMover) => { const pts = Math.max(1, Math.ceil(sizeScore(m) - sizeScore(us) + 0.01)); return { points: pts, trucks: Math.ceil(pts / SIZE_WEIGHTS.perTruck), drivers: Math.ceil(pts / SIZE_WEIGHTS.perDriver) }; };
+  const measure = (label: string, ourValue: number, value: (m: RankingMover) => number, unit = '') => {
     const values = rows.map(value).sort((a, b) => b - a);
     return { label, ours: ourValue, rank: values.filter(v => v > ourValue).length + 1, of: rows.length + 1, leader: values[0] ?? 0, median: values.length ? values[Math.floor(values.length / 2)] : 0, unit };
   };

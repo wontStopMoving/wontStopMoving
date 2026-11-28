@@ -10,6 +10,8 @@ import { SESv2Client } from '@aws-sdk/client-sesv2';
 import nodemailer from 'nodemailer';
 import { SMS_DISCLOSURE_VERSION } from '../src/lib/sms-consent.ts';
 import { geohashForLocation } from 'geofire-common';
+import { collectRegistryMap } from '../src/lib/registry-map.ts';
+import { notListedFor } from '../src/lib/server/registry-lookup.ts';
 import { supportInquirySchema } from '../src/lib/support.ts';
 import { sendSignupVerification } from '../src/lib/email-verification.ts';
 import { syncConnectedAccountStatus } from '../src/lib/server/connect-status.ts';
@@ -1460,7 +1462,7 @@ test('mover registry API: admin-only search, area ranking, tracking competitors 
   const nationwide = await (await search(adminToken, 'sort=size')).json();
   assert.equal(nationwide.mode, 'national');
   assert.equal(nationwide.total, 2); // Every likely mover in the country (only CA in this fixture), not just top lists.
-  assert.equal(nationwide.nationalComplete, true);
+  assert.equal(nationwide.nationalComplete, false); // Only CA has a snapshot in this fixture.
   const wholeMap = await (await search(adminToken, 'map=1&south=20&west=-130&north=50&east=-65')).json();
   assert.equal(wholeMap.points.length, 2); // Only CA exists in the fixture, so the map view loads it in detail.
   // Map pins follow the visible map even when the list is set to another area (here: list = Puget Sound, map over San Jose).
@@ -1499,6 +1501,82 @@ test('mover registry API: admin-only search, area ranking, tracking competitors 
   assert.equal((await (await fetch(`${base}/api/admin/registry/1234567?state=CA`, { headers: { Authorization: `Bearer ${adminToken}` } })).json()).web.source, 'email');
 
   for (const path of ['/api/cron/registry-sync', '/api/cron/registry-enrich']) assert.equal((await fetch(`${base}${path}`, { method: 'POST' })).status, 401);
+});
+
+test('registry search finds full-snapshot names and registrations outside the selected area', async () => {
+  const fixtures = [
+    { state: 'WA', city: 'SEATTLE', dot: '3227005', name: 'GS MOVING SERVICES LLC', dba: 'ECO-MOVERS', lat: 47.7, lng: -122.4, likelyMover: false },
+    { state: 'WA', city: 'SEATTLE', dot: '373545', name: 'GENTLE GIANT WEST', lat: 47.6, lng: -122.3, likelyMover: true },
+    { state: 'MA', city: 'WINCHESTER', dot: '373544', name: 'GENTLE GIANT INTERSTATE COMPANY LLC', dba: 'GENTLE GIANT MOVING COMPANY', lat: 42.45, lng: -71.14, likelyMover: true },
+    { state: 'AK', city: 'ADAK', dot: '373546', name: 'ADAK MOVING', lat: 51.88, lng: -176.65, likelyMover: true },
+  ].map(data => ({ ...toMover(census(), undefined, () => null), ...data }));
+  for (const state of ['WA', 'MA', 'AK']) {
+    const rows = fixtures.filter(row => row.state === state);
+    writeFileSync(join(process.env.REGISTRY_LOCAL_DIR, `${state}.json.gz`), gzipSync(Buffer.from(JSON.stringify(rows))));
+    if (state !== 'AK') {
+      writeFileSync(join(process.env.REGISTRY_LOCAL_DIR, `${state}.lite.json.gz`), gzipSync(Buffer.from(JSON.stringify(rows.filter(row => row.likelyMover)))));
+    }
+  }
+  const search = async (params) => {
+    const response = await fetch(`${base}/api/admin/registry?${new URLSearchParams(params)}`, { headers: { Authorization: `Bearer ${adminToken}` } });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  assert.deepEqual((await search({ q: 'ecomovers' })).rows.map(row => row.dot), ['3227005']);
+  const washington = await search({ states: 'WA', q: 'gentle giant' });
+  assert.deepEqual(washington.rows.map(row => row.dot), ['373545']);
+  assert.deepEqual(washington.elsewhere.map(row => row.dot), ['373544']);
+  const sanFrancisco = await search({ q: 'Gentle Giant', city: 'San Francisco' });
+  assert.equal(sanFrancisco.rows.length, 0);
+  assert.ok(sanFrancisco.elsewhere.some(row => row.dot === '373544'));
+
+  const viewport = { map: '1', vbSouth: '47.5', vbWest: '-122.6', vbNorth: '47.8', vbEast: '-122.2' };
+  const mapped = await search({ ...viewport, states: 'CA', likely: '0' });
+  assert.equal(mapped.mapTotal, 2);
+  assert.deepEqual(mapped.points.map(pin => pin[0]).sort(), ['3227005', '373545']);
+  const limited = await search({ ...viewport, states: 'CA' });
+  assert.deepEqual(limited.points.map(pin => pin[0]), ['373545']);
+  await db.doc('registryEnrichment/373545').set({ kind: 'local_mover', sos: { best: { active: false } } });
+  const filtered = await search({ ...viewport, states: 'WA', kind: 'local_mover', sos: 'inactive' });
+  assert.deepEqual(filtered.rows.map(row => row.dot), ['373545']);
+  assert.deepEqual(filtered.points.map(pin => pin[0]), ['373545']);
+
+  const aleutians = await search({ map: '1', vbSouth: '51', vbWest: '170', vbNorth: '53', vbEast: '-170' });
+  assert.equal(aleutians.mapTotal, 1);
+  assert.equal(aleutians.points[0][0], '373546');
+  assert.ok(aleutians.points[0][2] > 180);
+});
+
+test('federal lookup finds the inactive Seattle filing by name or USDOT number', async () => {
+  for (const query of ["Can't Stop Moving", "Can’t Stop Moving", 'cant stop moving', '1934023']) {
+    const [record] = await notListedFor(query, async url => {
+      const filter = new URL(url).searchParams.get('$where');
+      if (query === '1934023') assert.equal(filter, "dot_number='1934023'");
+      else assert.match(filter, /%CAN%T%STOP%MOVING%/);
+      return Response.json([{
+        dot_number: '1934023', legal_name: "CAN'T STOP MOVING LLC", phy_city: 'SEATTLE', phy_state: 'WA', status_code: 'I', crgo_household: 'X',
+      }]);
+    });
+    assert.equal(record.dot, '1934023');
+    assert.equal(record.state, 'WA');
+    assert.match(record.reason, /federal USDOT registration is inactive/);
+  }
+});
+
+test('map clusters count every pin beyond the old national limit and expose individual pins at street zoom', () => {
+  const points = Array.from({ length: 32000 }, (_, i) => [String(i + 1), 40 + i % 20 / 10, -121 - i % 15 / 10, 'Moving company', 1, 'CA']);
+  const bounds = { south: 39, west: -125, north: 43, east: -120 };
+  const map = collectRegistryMap(bounds, 5);
+  for (let i = 0; i < points.length; i += 1000) map.add(points.slice(i, i + 1000));
+  const overview = map.result();
+  assert.equal(overview.points.length, 0);
+  assert.equal(overview.total, points.length);
+  assert.equal(overview.clusters.reduce((sum, cluster) => sum + cluster.count, 0), points.length);
+  assert.ok(overview.clusters.length > 1 && overview.clusters.length <= 960);
+  const street = collectRegistryMap({ south: 39.99, north: 40.01, west: -121.01, east: -120.99 }, 18);
+  const streetPins = points.filter(pin => pin[1] === 40 && pin[2] === -121);
+  street.add(streetPins);
+  assert.equal(street.result().points.length, streetPins.length);
 });
 
 test('market logic: changes between days, closure reasons, expansion and buy scores, and the public verdict', () => {
