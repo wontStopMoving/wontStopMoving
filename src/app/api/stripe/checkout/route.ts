@@ -9,7 +9,7 @@ import { errorResponse, HttpError, isId, readJson, requireRole, requireStripe, s
 import { requireCurrentTerms, bookingTermsAcceptance } from '@/lib/server/terms';
 import { TERMS_VERSION } from '@/lib/terms';
 import { validProviderPricing } from '@/lib/mover-pricing';
-import { savedCardCustomer, SAVED_CARD_NOTE } from '@/lib/server/stripe-customer';
+import { savedCardCustomer, SAVED_CARD_NOTE, SAVE_CARD_ONLY } from '@/lib/server/stripe-customer';
 
 /**
  * Starts a provider booking. The job and its price are created here on the
@@ -82,7 +82,8 @@ export async function POST(req: Request) {
       mode: "payment",
       customer: stripeCustomerId,
       custom_text: { submit: { message: SAVED_CARD_NOTE } },
-      payment_intent_data: { setup_future_usage: "off_session", transfer_group: `JOB_${jobRef.id}` },
+      payment_intent_data: { transfer_group: `JOB_${jobRef.id}` },
+      payment_method_options: SAVE_CARD_ONLY,
       line_items: [
         {
           price_data: {

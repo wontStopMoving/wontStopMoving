@@ -12,6 +12,10 @@ env:
     value: "true"
     availability: [BUILD, RUNTIME]
   # Deferred until the owner activates and registers the Twilio sender.
+  # Affirm is on in the Stripe Dashboard (docs/financing.md); shows "Pay over time".
+  - variable: NEXT_PUBLIC_FINANCING_ENABLED
+    value: "1"
+    availability: [BUILD, RUNTIME]
   - variable: NEXT_PUBLIC_MARKETPLACE_SMS_ENABLED
     value: "false"
     availability: [BUILD, RUNTIME]

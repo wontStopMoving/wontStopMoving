@@ -12,7 +12,7 @@ import { moverCartSchema, providerShareCents, type MoverCartItem } from '../move
 import { validProviderPricing } from '../mover-pricing';
 import { moverCity } from './mover-locations';
 import { moverCityCenter, providerServesCity } from './mover-coverage';
-import { savedCardCustomer, SAVED_CARD_NOTE } from './stripe-customer';
+import { savedCardCustomer, SAVED_CARD_NOTE, SAVE_CARD_ONLY } from './stripe-customer';
 
 export async function createMoverCheckout(uid: string, email: string | undefined, body: Record<string, unknown>, origin: string, opts: { guest?: boolean } = {}) {
   if (process.env.NEXT_PUBLIC_MARKETPLACE_CHECKOUT_ENABLED !== 'true') throw new HttpError(503, 'Marketplace checkout is opening soon. Book our team directly or contact us for help.');
@@ -75,7 +75,7 @@ export async function createMoverCheckout(uid: string, email: string | undefined
     mode: 'payment', customer: stripeCustomerId, integration_identifier: `wsm_cart_${tag}`,
     line_items: order.items.map((item: { providerName: string; service: string; hours: number; totalCents: number; cardCents?: number }) => ({ quantity: 1, price_data: { currency: 'usd', unit_amount: item.cardCents ?? item.totalCents, product_data: { name: `${item.providerName} · ${item.service}`, description: `${item.hours} hours. Release this crew’s payment code after their work is complete.` } } })),
     // Gift cards and credit can cover the whole booking; then there is no card payment to save or transfer.
-    ...(order.cardCents !== 0 ? { custom_text: { submit: { message: SAVED_CARD_NOTE } }, payment_intent_data: { transfer_group: `ORDER_${id}`, setup_future_usage: 'off_session' as const } } : {}),
+    ...(order.cardCents !== 0 ? { custom_text: { submit: { message: SAVED_CARD_NOTE } }, payment_intent_data: { transfer_group: `ORDER_${id}` }, payment_method_options: SAVE_CARD_ONLY } : {}),
     expires_at: Math.floor(order.startedAt.toMillis() / 1000) + 3600,
     metadata: { flow: 'mover_cart', orderId: id, customerId: uid, ...(opts.guest ? { guest: 'true', origin } : {}) },
     // Guests aren't signed in yet, so they land on a confirmation page instead of the dashboard.
