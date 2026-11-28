@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { ProfileMenu } from "@/components/layout/profile-menu";
 import { usePathname, useRouter } from "next/navigation";
-import { Crown, 
+import { Crown, UserSearch, 
   Truck, 
   Megaphone,
   ConciergeBell,
@@ -108,6 +108,7 @@ export function EmployeeLayout({ children, isAdmin = false }: { children: React.
     { label: "My Jobs", href: "/dashboard/employee/jobs", icon: Truck },
     { label: "Calendar", href: "/dashboard/employee/calendar", icon: Calendar },
     { label: "Lead Inbox", href: "/dashboard/employee/leads", icon: Inbox },
+    { label: "Look Up Account", href: "/dashboard/employee/lookup", icon: UserSearch },
     { label: "Sales Call Script", href: "/dashboard/employee/sales-script", icon: PhoneCall },
     { label: "Feedback", href: "/dashboard/employee/feedback", icon: MessageSquare },
     { label: "Profile", href: "/dashboard/employee/profile", icon: User },
@@ -127,6 +128,7 @@ export function EmployeeLayout({ children, isAdmin = false }: { children: React.
     { label: "Demand Monitor", href: "/dashboard/admin/demand", icon: Ear },
     { label: "Sales Call Script", href: "/dashboard/admin/sales-script", icon: PhoneCall },
     { label: "Stripe & Banking", href: "/dashboard/admin/banking", icon: Landmark },
+    { label: "Look Up Account", href: "/dashboard/admin/lookup", icon: UserSearch },
     { label: "Customers", href: "/dashboard/admin/customers", icon: User },
     { label: "Provider Scorecards", href: "/dashboard/admin/scorecards", icon: Award },
     { label: "Account Activity", href: "/dashboard/admin/activity", icon: Clock },

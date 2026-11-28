@@ -56,6 +56,13 @@ export async function searchRegistry(q: RegistryQuery, us: UsProfile | null, opt
   } else {
     rows = filterMovers(await loadStates(states), { ...q, area: q.region ? REGION_PRESETS[q.region] : undefined, states: q.region ? undefined : states });
   }
+  // A company name that isn't in the chosen area: look nationwide, so a mover
+  // registered elsewhere (Gentle Giant's SF crews file from Massachusetts) still turns up (#108).
+  let elsewhere: Mover[] = [];
+  if (!national && q.q && !rows.length) {
+    const nat = await loadNational(REGISTRY_AREAS);
+    elsewhere = sortMovers(filterMovers(nat.rows, { q: q.q, likelyOnly: false }), 'size').slice(0, 10);
+  }
   const near = q.near ? { lat: q.near.lat, lng: q.near.lng } : undefined;
   const sorted = sortMovers(rows, q.sort || 'size', near);
   const pageSize = Math.min(Math.max(q.pageSize || 50, 1), opts.all ? 10000 : 200);
@@ -73,6 +80,7 @@ export async function searchRegistry(q: RegistryQuery, us: UsProfile | null, opt
     points: opts.points ? sorted.filter(m => m.lat !== null && m.lng !== null).slice(0, national ? 30000 : 15000).map(m => [m.dot, m.lat, m.lng, m.dba || m.name, m.units, m.state]) : undefined,
     totals: { units: rows.reduce((n, m) => n + m.units, 0), drivers: rows.reduce((n, m) => n + m.drivers, 0) },
     updatedAt: summaries.filter(s => !national ? states.includes(s.state) : true).map(s => s.updatedAt).filter(Boolean).sort().pop() || null,
+    elsewhere,
   };
 }
 

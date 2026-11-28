@@ -7,6 +7,7 @@ import { updateApproval, approvalEmailNote } from "@/lib/api-client";
 import { doc, updateDoc } from "firebase/firestore";
 import { useAdminProviders } from "@/hooks/use-admin-providers";
 import { isPendingProvider } from "@/lib/provider-status";
+import { useAccountActivity } from "@/hooks/use-account-activity";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { UserCheck, ShieldAlert, FileText, CheckCircle2, Clock, MapPin, Sparkles } from "lucide-react";
@@ -19,6 +20,7 @@ function ProviderManagementContent() {
   const auth = useAuth();
 
   const { providers: allProviders, isLoading, error } = useAdminProviders();
+  const { accounts } = useAccountActivity((allProviders || []).map(p => p.id));
   // Links like /dashboard/admin/providers?status=pending open on that filter.
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "suspended">("all");
   useEffect(() => {
@@ -70,7 +72,7 @@ function ProviderManagementContent() {
       ) : providers && providers.length > 0 ? (
         <div className="grid gap-6">
           {providers.map((provider) => (
-            <Card key={provider.id} className="border-none shadow-md overflow-hidden">
+            <Card key={provider.id} id={`provider-${provider.id}`} className="border-none shadow-md overflow-hidden scroll-mt-24">
               <div className="flex flex-col md:flex-row">
                 {/* Info Section */}
                 <div className="flex-1 p-6">
@@ -79,6 +81,7 @@ function ProviderManagementContent() {
                       <h3 className="text-xl font-black text-primary uppercase tracking-tight">{provider.businessName || provider.name}</h3>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1 font-medium">
                         <MapPin className="w-4 h-4" /> {provider.city || provider.address?.city || "City not set"}, {provider.state || provider.address?.state || "US"}
+                        <span className="ml-2">· Joined {accounts[provider.id]?.createdAt ? new Date(accounts[provider.id].createdAt!).toLocaleDateString() : 'unknown'}</span>
                       </div>
                     </div>
                     <div>

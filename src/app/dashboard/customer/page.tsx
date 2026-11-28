@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { ReferralCard } from "@/components/dashboard/referral-card";
+import { AccountNumber } from '@/components/account-number';
 
 function CustomerDashboardContent() {
   const { user } = useUser();
@@ -145,6 +146,7 @@ function CustomerDashboardContent() {
           <p className="text-muted-foreground text-sm">
             Track your tasks, quotes, and upcoming relocations in one place
           </p>
+          <AccountNumber className="mt-1" />
         </div>
         <div className="flex flex-wrap gap-3">
           <Button

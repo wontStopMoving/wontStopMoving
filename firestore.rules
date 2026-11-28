@@ -83,9 +83,11 @@ service cloud.firestore {
         // an existing admin (or server-side with the Admin SDK).
         isOwner(userId) &&
         request.resource.data.role in ['customer', 'employee', 'provider'] &&
+        // Account numbers (#187) are assigned server-side only.
+        !('accountNumber' in request.resource.data) &&
         ((request.resource.data.role != 'customer' && !('termsAcceptance' in request.resource.data)) || acceptedCurrentTerms(request.resource.data.get('termsAcceptance', {}), 'signup'))
       );
-      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['termsAcceptance']) && (isAdmin() || (
+      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['termsAcceptance', 'accountNumber']) && (isAdmin() || (
         isOwner(userId) &&
         request.resource.data.role == resource.data.role
       ));

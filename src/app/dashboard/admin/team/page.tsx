@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth, useUser } from '@/firebase';
 import { apiFetch } from '@/lib/api-client';
+import { useAccountActivity } from '@/hooks/use-account-activity';
 
 type Admin = { uid: string; name: string; email: string; grantedBy: string | null; grantedAt: string | null };
 type Invite = { email: string; invitedBy: string; invitedAt: string | null };
@@ -21,6 +22,7 @@ function Team() {
   const [notice, setNotice] = useState('');
 
   const load = useCallback(() => apiFetch<{ admins: Admin[]; invites: Invite[] }>(auth, '/api/admin/team').then(setData).catch(e => setNotice(e instanceof Error ? e.message : 'Could not load the team.')), [auth]);
+  const { accounts } = useAccountActivity((data?.admins || []).map(a => a.uid));
   useEffect(() => { void load(); }, [load]);
 
   const act = async (body: Record<string, unknown>, done: (status: string) => string) => {
@@ -57,7 +59,7 @@ function Team() {
     <Card className="bg-white"><CardContent className="p-6 space-y-3">
       <h2 className="font-bold text-lg">Admins</h2>
       {!data ? <p>Loading…</p> : data.admins.map(a => <div key={a.uid} className="flex items-center justify-between gap-3 border-b last:border-0 pb-2">
-        <div><p className="font-medium">{a.name || a.email}{a.uid === user?.uid ? ' (you)' : ''}</p><p className="text-xs text-muted-foreground">{a.email}{a.grantedBy ? ` · added by ${a.grantedBy} ${day(a.grantedAt)}` : ''}</p></div>
+        <div><p className="font-medium">{a.name || a.email}{a.uid === user?.uid ? ' (you)' : ''}</p><p className="text-xs text-muted-foreground">{a.email} · joined {day(accounts[a.uid]?.createdAt ?? null) || 'unknown'}{a.grantedBy ? ` · made admin by ${a.grantedBy} ${day(a.grantedAt)}` : ''}</p></div>
         {a.uid !== user?.uid && <Button variant="outline" size="sm" disabled={busy} onClick={() => { if (confirm(`Remove admin access for ${a.email}? Their account becomes a customer account.`)) void act({ action: 'remove', uid: a.uid }, () => `${a.email} is no longer an admin.`); }}>Remove admin</Button>}
       </div>)}
     </CardContent></Card>
