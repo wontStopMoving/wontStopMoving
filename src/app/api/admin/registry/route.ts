@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { errorResponse, HttpError, readJson, requireRole } from '@/lib/server/auth';
-import { CARRIER_TYPES, ourFleet, searchRegistry, stateSummaries, type CarrierType, type RegistryQuery } from '@/lib/server/registry-query';
+import { CARRIER_TYPES, ourFleet, searchMoverMap, searchRegistry, stateSummaries, type CarrierType, type RegistryQuery } from '@/lib/server/registry-query';
 import { classifyAndSave, classifyPartnerAndSave, enrichmentFor } from '@/lib/server/registry-enrich';
-import { notListedFor, syncState } from '@/lib/server/registry-sync';
+import { notListedFor } from '@/lib/server/registry-lookup';
+import { syncState } from '@/lib/server/registry-sync';
 import { trackedByDot, trackMovers } from '@/lib/server/registry-track';
 import { loadManifest, loadPartners, loadState } from '@/lib/server/registry-store';
 import { adminDb } from '@/lib/server/firebase-admin';
@@ -11,7 +12,7 @@ import { REGION_BY_CODE } from '@/lib/agents';
 import { importDue, servicesLabel, tupleToMover } from '@/lib/carriers';
 import { jevConfigured } from '@/lib/server/jev';
 import { REGION_PRESETS } from '@/lib/regions';
-import { moversCsv, REGISTRY_AREAS, yearsInBusiness, type Mover, type SortKey } from '@/lib/registry';
+import { moversCsv, REGISTRY_AREAS, yearsInBusiness, type Mover, type RegistryBounds, type SortKey } from '@/lib/registry';
 
 /**
  * The national mover registry (free FMCSA data): search, map points, our
@@ -21,6 +22,12 @@ export const maxDuration = 60;
 const SORTS: SortKey[] = ['size', 'units', 'drivers', 'miles', 'years', 'newest', 'name', 'distance', 'score'];
 const n = (v: string | null) => (v === null || v === '' ? undefined : Number.isFinite(Number(v)) ? Number(v) : undefined);
 
+function parseBounds(south?: number, west?: number, north?: number, east?: number): RegistryBounds | undefined {
+  if (south === undefined || west === undefined || north === undefined || east === undefined ||
+      south < -90 || north > 90 || south > north || Math.abs(west) > 720 || Math.abs(east) > 720 || east - west < -360) return;
+  return { south, west, north, east: east < west ? east + 360 : east };
+}
+
 function parseQuery(p: URLSearchParams | Record<string, unknown>): RegistryQuery {
   const get = (k: string) => (p instanceof URLSearchParams ? p.get(k) : p[k] === undefined || p[k] === null ? null : String(p[k]));
   const states = (get('states') || '').toUpperCase().split(',').map(s => s.trim()).filter(s => REGISTRY_AREAS.includes(s));
@@ -29,9 +36,9 @@ function parseQuery(p: URLSearchParams | Record<string, unknown>): RegistryQuery
   const region = get('region') || undefined;
   return {
     type: CARRIER_TYPES.includes(get('type') as Exclude<CarrierType, ''>) ? (get('type') as CarrierType) : undefined,
-    q: (get('q') || '').slice(0, 80) || undefined, states, region: region && REGION_PRESETS[region] ? region : undefined,
+    q: (get('q') || '').trim().slice(0, 80) || undefined, states, region: region && REGION_PRESETS[region] ? region : undefined,
     city: (get('city') || '').slice(0, 60) || undefined, zip: /^\d{3,5}$/.test(get('zip') || '') ? get('zip')! : undefined,
-    bbox: [south, west, north, east].every(v => v !== undefined) ? { south: south!, west: west!, north: north!, east: east! } : undefined,
+    bbox: parseBounds(south, west, north, east),
     near: nearLat !== undefined && nearLng !== undefined ? { lat: nearLat, lng: nearLng, miles: Math.min(nearMiles || 25, 500) } : undefined,
     minUnits: n(get('minUnits')), maxUnits: n(get('maxUnits')), minDrivers: n(get('minDrivers')), minYears: n(get('minYears')),
     addedSince: /^\d+$/.test(get('newDays') || '') ? new Date(Date.now() - Math.min(Number(get('newDays')), 3650) * 86400000).toISOString().slice(0, 10) : undefined,
@@ -43,23 +50,25 @@ function parseQuery(p: URLSearchParams | Record<string, unknown>): RegistryQuery
   };
 }
 
-/** Filters that need cached enrichment (Jev kind, registry status, tracked). */
-async function applyEnrichmentFilters(rows: Mover[], p: URLSearchParams | Record<string, unknown>) {
-  const get = (k: string) => (p instanceof URLSearchParams ? p.get(k) : (p[k] as string | undefined) ?? null);
-  const kinds = (get('kind') || '').split(',').filter(Boolean);
+/** Resolve indexed filters once so the list, totals and map see the same companies. */
+async function registryEnrichmentFilters(p: URLSearchParams | Record<string, unknown>) {
+  const get = (key: string) => p instanceof URLSearchParams ? p.get(key) : String(p[key] ?? '');
+  const kinds = [...new Set((get('kind') || '').split(',').filter(Boolean))].slice(0, 30);
   const sos = get('sos'), tracked = get('tracked');
-  if (!kinds.length && !sos && !tracked) return null;
-  const capped = rows.slice(0, 5000);
-  const [enr, trackedMap] = await Promise.all([enrichmentFor(capped.map(m => m.dot)), tracked ? trackedByDot() : Promise.resolve(new Map<string, string>())]);
-  return capped.filter(m => {
-    const e = enr.get(m.dot);
-    if (kinds.length && !(e?.kind && kinds.includes(e.kind))) return false;
-    if (sos === 'active' && e?.sos?.best?.active !== true) return false;
-    if (sos === 'inactive' && e?.sos?.best?.active !== false) return false;
-    if (tracked === '1' && !trackedMap.has(m.dot)) return false;
-    if (tracked === '0' && trackedMap.has(m.dot)) return false;
-    return true;
-  });
+  const collection = adminDb().collection('registryEnrichment');
+  const [byKind, byStatus, trackedMap] = await Promise.all([
+    kinds.length ? collection.where('kind', 'in', kinds).select().get() : null,
+    sos === 'active' || sos === 'inactive' ? collection.where('sos.best.active', '==', sos === 'active').select().get() : null,
+    tracked === '1' || tracked === '0' ? trackedByDot() : null,
+  ]);
+  const fields = [byKind?.docs.map(doc => doc.id), byStatus?.docs.map(doc => doc.id),
+    tracked === '1' && trackedMap ? [...trackedMap.keys()] : undefined];
+  let dots: Set<string> | undefined;
+  for (const matches of fields) {
+    if (!matches) continue;
+    dots = new Set(dots ? matches.filter(dot => dots!.has(dot)) : matches);
+  }
+  return { dots, excludeDots: tracked === '0' && trackedMap ? new Set(trackedMap.keys()) : undefined };
 }
 
 async function decorate(rows: Mover[]) {
@@ -74,25 +83,20 @@ export async function GET(req: Request) {
   try {
     await requireRole(req, ['admin']);
     const params = new URL(req.url).searchParams;
-    const query = parseQuery(params);
+    const query = { ...parseQuery(params), ...await registryEnrichmentFilters(params) };
     const csv = params.get('format') === 'csv';
-    const needsEnrichment = ['kind', 'sos', 'tracked'].some(k => params.get(k));
-    const result = await searchRegistry(query, await ourFleet(), { points: params.get('map') === '1' && !params.get('vbSouth'), all: csv || needsEnrichment });
-    // The map shows every company in view (same filters), whatever area the list is set to.
-    if (params.get('map') === '1' && params.get('vbSouth')) {
-      const [south, west, north, east] = ['vbSouth', 'vbWest', 'vbNorth', 'vbEast'].map(k => Number(params.get(k)));
-      if ([south, west, north, east].every(Number.isFinite)) {
-        const view = await searchRegistry({ ...query, region: undefined, states: [], near: undefined, bbox: { south, west, north, east }, page: 1, pageSize: 1 }, null, { points: true });
-        result.points = view.points;
-      }
-    }
-    let rows = result.rows, total = result.total;
-    if (needsEnrichment) {
-      const filtered = (await applyEnrichmentFilters(result.all || [], params)) || [];
-      total = filtered.length;
-      const size = Math.min(Math.max(query.pageSize || 50, 1), 200), page = Math.max(query.page || 1, 1);
-      rows = csv ? filtered : filtered.slice((page - 1) * size, page * size);
-    } else if (csv) rows = result.all || [];
+    const showMap = params.get('map') === '1';
+    const [south, west, north, east] = ['vbSouth', 'vbWest', 'vbNorth', 'vbEast'].map(key => n(params.get(key)));
+    const viewport = parseBounds(south, west, north, east);
+    const zoom = Math.min(18, Math.max(0, n(params.get('vbZoom')) ?? 0));
+    const mapQuery = { ...query, region: undefined, states: [], near: undefined, bbox: viewport, page: 1, pageSize: 1 };
+    const result = await searchRegistry(query, await ourFleet(), { points: showMap && !viewport, all: csv, allLimit: 20000, zoom });
+    const view = showMap && viewport
+      ? await (query.type ? searchRegistry(mapQuery, null, { points: true, zoom }) : searchMoverMap(mapQuery, zoom))
+      : null;
+    const mapView = view ?? result;
+    const { total } = result;
+    const rows = csv ? result.all || [] : result.rows;
     if (csv) {
       return new NextResponse(moversCsv(rows.slice(0, 20000), Date.now(), servicesLabel), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${query.type ? 'carriers' : 'movers'}-${new Date().toISOString().slice(0, 10)}.csv"`, 'Cache-Control': 'private, no-store' } });
     }
@@ -105,7 +109,7 @@ export async function GET(req: Request) {
     const stateCount = (s: (typeof summaries)[number]) => (!type ? s.likely : type === 'partners' ? s.partners ?? 0 : s.categories?.[type] ?? 0);
     return NextResponse.json({
       needsArea: 'needsArea' in result ? result.needsArea : false, import: params.get('stats') === '1' ? await importStatus() : undefined,
-      mode: result.mode, nationalComplete: result.nationalComplete ?? null, total, rows: await decorate(rows), rank: result.rank, explain: result.explain, points: result.points, totals: result.totals, updatedAt: result.updatedAt,
+      mode: result.mode, nationalComplete: result.nationalComplete ?? null, total, rows: await decorate(rows), rank: result.rank, explain: result.explain, points: mapView.map?.points, clusters: mapView.map?.clusters, mapTotal: mapView.map?.total, mapComplete: mapView.nationalComplete, totals: result.totals, updatedAt: result.updatedAt,
       synced: summaries.length, jev: jevConfigured(), elsewhere: elsewhere.length ? await decorate(elsewhere) : [], notListed,
       stateStats: params.get('stats') === '1' ? summaries.map(s => ({ state: s.state, count: s.count, likely: stateCount(s), units: s.units, center: s.center, updatedAt: s.updatedAt })) : undefined,
     }, { headers: { 'Cache-Control': 'private, no-store' } });
@@ -136,12 +140,11 @@ export async function POST(req: Request) {
     const body = await readJson(req);
 
     if (body.action === 'track') {
-      const query = parseQuery((body.query && typeof body.query === 'object' ? body.query : {}) as Record<string, unknown>);
+      const options = (body.query && typeof body.query === 'object' ? body.query : {}) as Record<string, unknown>;
+      const query = { ...parseQuery(options), ...await registryEnrichmentFilters(options) };
       const limit = Math.min(Math.max(Number(body.limit) || 300, 1), 300);
-      const result = await searchRegistry({ ...query, page: 1, pageSize: limit }, null, { all: true });
+      const result = await searchRegistry({ ...query, page: 1, pageSize: limit }, null, { all: true, allLimit: limit });
       let rows = result.all || [];
-      const filtered = await applyEnrichmentFilters(rows, (body.query || {}) as Record<string, unknown>);
-      if (filtered) rows = filtered;
       if (result.mode === 'national') {
         // National lists hold summary rows; fetch full records state by state.
         const byState = new Map<string, Mover[]>();

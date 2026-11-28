@@ -5,8 +5,8 @@ import 'leaflet/dist/leaflet.css';
 import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 
-/** color: set for the partner shortlist (one color per category); otherwise pins are colored by fleet size. */
-export type MapPoint = [dot: string, lat: number, lng: number, name: string, units: number, state: string, color?: string];
+import type { MapCluster, MapPoint } from '@/lib/registry-map';
+
 export type StateStat = { state: string; likely: number; units: number; center: [number, number] | null };
 export type Bounds = { south: number; west: number; north: number; east: number; zoom: number };
 
@@ -14,8 +14,8 @@ export type Bounds = { south: number; west: number; north: number; east: number;
  * Free OpenStreetMap map: every company as a dot sized by fleet, clustered
  * (with counts) when zoomed out. Optional state-total bubbles instead.
  */
-export function MoverMap({ points, stateStats, focus, onBounds, onSelect, onState, highlight, stateTotals = false }: {
-  points: MapPoint[]; stateStats: StateStat[]; stateTotals?: boolean; focus: { lat: number; lng: number; zoom: number } | null;
+export function MoverMap({ points, clusters, stateStats, focus, onBounds, onSelect, onState, highlight, stateTotals = false }: {
+  points: MapPoint[]; clusters: MapCluster[]; stateStats: StateStat[]; stateTotals?: boolean; focus: { lat: number; lng: number; zoom: number } | null;
   onBounds: (b: Bounds) => void; onSelect: (dot: string, state: string) => void; onState: (state: string) => void; highlight?: string | null;
 }) {
   const el = useRef<HTMLDivElement>(null);
@@ -63,6 +63,21 @@ export function MoverMap({ points, stateStats, focus, onBounds, onSelect, onStat
       layer.current = group.addTo(m);
       return;
     }
+    if (clusters.length) {
+      const group = leaflet.layerGroup();
+      for (const { lat, lng, count } of clusters) {
+        const icon = leaflet.divIcon({
+          className: 'marker-cluster marker-cluster-medium',
+          html: `<div><span>${count.toLocaleString()}</span></div>`,
+          iconSize: leaflet.point(40, 40),
+        });
+        leaflet.marker([lat, lng], { icon, alt: `${count} moving companies` })
+          .on('click', () => m.setView([lat, lng], Math.min(18, m.getZoom() + 2))).addTo(group);
+      }
+      layer.current = group.addTo(m);
+      return;
+    }
+
     const cluster = (leaflet as any).markerClusterGroup({ chunkedLoading: true, showCoverageOnHover: false, maxClusterRadius: 45 });
     for (const [dot, lat, lng, name, units, state, color] of points) {
       const big = units >= 20, mid = units >= 5;
@@ -75,7 +90,7 @@ export function MoverMap({ points, stateStats, focus, onBounds, onSelect, onStat
       cluster.addLayer(mk);
     }
     layer.current = cluster.addTo(m);
-  }, [points, stateStats, highlight, stateTotals]);
+  }, [points, clusters, stateStats, highlight, stateTotals]);
 
   return <div ref={el} className="h-[420px] md:h-[520px] w-full rounded-2xl overflow-hidden border bg-slate-100 z-0" role="region" aria-label="Map of moving companies" />;
 }

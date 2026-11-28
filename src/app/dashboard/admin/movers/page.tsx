@@ -14,7 +14,8 @@ import { apiFetch } from '@/lib/api-client';
 import { REGISTRY_AREAS } from '@/lib/registry';
 import { REGION_PRESETS } from '@/lib/regions';
 import { CATEGORIES, CATEGORY_COLOR, CATEGORY_LABEL, PARTNER_KEYS, categoriesOf } from '@/lib/carriers';
-import type { Bounds, MapPoint, StateStat } from '@/components/registry/mover-map';
+import type { Bounds, StateStat } from '@/components/registry/mover-map';
+import type { MapCluster, MapPoint } from '@/lib/registry-map';
 import { ResearchPanel } from '@/components/agents/research-panel';
 import { SOCIAL_SCORE_HELP, type PlatformStats, type SocialSummary } from '@/lib/social-stats';
 import { SAFETY_HELP, type Safety } from '@/lib/safety';
@@ -31,7 +32,7 @@ type Row = {
 type ImportStatus = { generatedAt: string; runs: number; sourceUpdatedAt: string | null; schedule: string; nextCheck: string; totals: { rows: number; active: number; movers: number; carriers: number; partners?: number; newPartners?: number; categories: Record<string, number> }; columns: { added: string[]; removed: string[]; count: number }; dictionary: { name: string; changedAt: string; checkedAt: string; previousName: string | null } | null };
 type Rank = { rank: number; of: number; nextUp: { dot: string; name: string; city: string; state: string; units: number; drivers: number; years: number; gap: { units: number; drivers: number; years: number } }[] };
 type Explain = { formula: string; ours: { trucks: number; drivers: number; miles: number; total: number }; rank: number; of: number; nextUp: { dot: string; name: string; city: string; state: string; units: number; drivers: number; years: number; score: { total: number }; need: { points: number; trucks: number; drivers: number } }[]; measures: { label: string; ours: number; rank: number; of: number; leader: number; median: number; unit: string }[]; shares: { authority: number; website: number }; steps: string[] };
-type Result = { needsArea?: boolean; import?: ImportStatus | null; mode: 'national' | 'detailed'; nationalComplete?: boolean | null; explain?: Explain | null; total: number; rows: Row[]; rank: Rank | null; points?: MapPoint[]; totals: { units: number; drivers: number }; updatedAt: string | null; synced: number; jev: boolean; elsewhere?: Row[]; notListed?: { dot: string; name: string; dba: string; city: string; state: string; reason: string }[]; stateStats?: (StateStat & { count: number; updatedAt: string | null })[] };
+type Result = { needsArea?: boolean; import?: ImportStatus | null; mode: 'national' | 'detailed'; nationalComplete?: boolean | null; explain?: Explain | null; total: number; rows: Row[]; rank: Rank | null; points?: MapPoint[]; clusters?: MapCluster[]; mapTotal?: number; mapComplete?: boolean; totals: { units: number; drivers: number }; updatedAt: string | null; synced: number; jev: boolean; elsewhere?: Row[]; notListed?: { dot: string; name: string; dba: string; city: string; state: string; reason: string }[]; stateStats?: (StateStat & { count: number; updatedAt: string | null })[] };
 
 const KIND_LABEL: Record<string, string> = { local_mover: 'Local mover', van_line: 'Van line', broker: 'Broker', freight: 'Freight', other: 'Not a mover' };
 const FIT_LABEL: Record<string, string> = { moving_help: 'Could do moving work', vehicle_transport: 'Ships cars', linehaul: 'Overflow / long-distance hauling', storage_container: 'Containers & storage', broker: 'Broker (doesn’t haul)', not_fit: 'Not a fit' };
@@ -50,7 +51,7 @@ function Registry() {
   const auth = useAuth();
   const { toast } = useToast();
   const [area, setArea] = useState<string>('bay-area'); // region preset, a state code, 'national' or 'map'
-  const [f, setF] = useState({ type: '', q: '', city: '', minUnits: '', minDrivers: '', minYears: '', newDays: '', interstate: '', hhg: false, likely: true, site: '', kind: '', sos: '', tracked: '', sort: 'size', rankBy: 'size' });
+  const [f, setF] = useState({ type: '', q: '', city: '', minUnits: '', minDrivers: '', minYears: '', newDays: '', interstate: '', hhg: false, likely: false, site: '', kind: '', sos: '', tracked: '', sort: 'size', rankBy: 'size' });
   const [bounds, setBounds] = useState<Bounds | null>(null);
   const [focus, setFocus] = useState<{ lat: number; lng: number; zoom: number } | null>(FOCUS['bay-area']);
   const [page, setPage] = useState(1);
@@ -61,7 +62,7 @@ function Registry() {
   useEffect(() => { const q = new URLSearchParams(window.location.search); const dot = q.get('dot'), st = q.get('state'); if (dot && st) setSelected({ dot, state: st.toUpperCase() }); }, []);
   const [busy, setBusy] = useState('');
   const [stateTotals, setStateTotals] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const currentRequest = useRef(0);
 
   const params = useMemo(() => {
     const p = new URLSearchParams({ sort: f.sort, rankBy: f.rankBy, page: String(page), pageSize: '50', map: '1', stats: '1' });
@@ -74,7 +75,7 @@ function Registry() {
     else if (REGION_PRESETS[area]) p.set('region', area);
     else if (REGISTRY_AREAS.includes(area)) p.set('states', area);
     // Map pins always cover the visible map, whatever area the list uses.
-    if (bounds) { p.set('vbSouth', bounds.south.toFixed(3)); p.set('vbWest', bounds.west.toFixed(3)); p.set('vbNorth', bounds.north.toFixed(3)); p.set('vbEast', bounds.east.toFixed(3)); }
+    if (bounds) { p.set('vbZoom', String(bounds.zoom)); p.set('vbSouth', bounds.south.toFixed(3)); p.set('vbWest', bounds.west.toFixed(3)); p.set('vbNorth', bounds.north.toFixed(3)); p.set('vbEast', bounds.east.toFixed(3)); }
     if (f.type) p.set('type', f.type);
     for (const [k, v] of Object.entries({ q: f.q, city: f.city, minUnits: f.minUnits, minDrivers: f.minDrivers, minYears: f.minYears, newDays: f.newDays, interstate: f.interstate, kind: f.kind, sos: f.sos, tracked: f.tracked, site: f.site })) if (v) p.set(k, v);
     if (f.hhg) p.set('hhg', '1');
@@ -83,12 +84,21 @@ function Registry() {
   }, [area, bounds, f, page]);
 
   const load = useCallback(async () => {
+    const request = ++currentRequest.current;
     setLoading(true);
-    try { setData(await apiFetch<Result>(auth, `/api/admin/registry?${params}`)); }
-    catch (e) { toast({ variant: 'destructive', title: 'Couldn’t load movers', description: e instanceof Error ? e.message : '' }); }
-    finally { setLoading(false); }
+    try {
+      const result = await apiFetch<Result>(auth, `/api/admin/registry?${params}`);
+      if (request === currentRequest.current) setData(result);
+    } catch (error) {
+      if (request === currentRequest.current) toast({ variant: 'destructive', title: 'Couldn’t load movers', description: error instanceof Error ? error.message : '' });
+    } finally {
+      if (request === currentRequest.current) setLoading(false);
+    }
   }, [auth, params, toast]);
-  useEffect(() => { clearTimeout(timer.current); timer.current = setTimeout(() => void load(), 350); return () => clearTimeout(timer.current); }, [load]);
+  useEffect(() => {
+    const timeout = setTimeout(() => void load(), 350);
+    return () => { clearTimeout(timeout); currentRequest.current++; };
+  }, [load]);
 
   // Move the map to the searched city so its pins and the list agree (#86).
   const focusedCity = useRef('');
@@ -183,10 +193,11 @@ function Registry() {
 
     <div className="grid lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-2">
-        <MoverMap points={data?.points || []} stateStats={(data?.stateStats || []) as StateStat[]} focus={focus}
+        <MoverMap points={data?.points || []} clusters={data?.clusters || []} stateStats={(data?.stateStats || []) as StateStat[]} focus={focus}
           onBounds={b => { setBounds(b); if (area === 'map') setPage(1); }} onSelect={(dot, state) => setSelected({ dot, state })} onState={s => { setStateTotals(false); chooseArea(s); }} highlight={selected?.dot} stateTotals={stateTotals} />
+        {!stateTotals && data?.mapComplete === false && <p className="text-xs text-muted-foreground">Some registry areas are temporarily unavailable.</p>}
         {f.type === 'partners' && <div className="flex flex-wrap gap-3 text-xs" aria-label="Map colors">{PARTNER_KEYS.map(k => <span key={k} className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full" style={{ background: CATEGORY_COLOR[k] }} />{CATEGORY_LABEL[k]}</span>)}</div>}
-        <div className="flex flex-wrap justify-between gap-2 items-center"><p className="text-xs text-muted-foreground">{f.type === 'partners' ? 'Colors: each carrier’s main kind of hauling (above).' : 'Red: 20+ trucks · Orange: 5–19 · Gray: under 5.'} The map shows every company in view, anywhere you pan (with your filters); numbers are clusters, zoom in to split them. Pins sit at each company’s ZIP code. {area !== 'map' && `The list below is ${areaLabel}; choose “Whatever the map shows” to list what’s on screen.`}</p><label className="text-xs flex items-center gap-1"><input type="checkbox" checked={stateTotals} onChange={e => setStateTotals(e.target.checked)} />Show state totals instead</label></div>
+        <div className="flex flex-wrap justify-between gap-2 items-center"><p className="text-xs text-muted-foreground">{f.type === 'partners' ? 'Colors: each carrier’s main kind of hauling (above).' : 'Red: 20+ trucks · Orange: 5–19 · Gray: under 5.'} {!stateTotals && data?.mapTotal !== undefined && ` ${data.mapTotal.toLocaleString()} companies mapped in view. `} Zoom in to split clusters. Pins use registered ZIP codes. {area !== 'map' && `The list below is ${areaLabel}; choose “Whatever the map shows” to list what’s on screen.`}</p><label className="text-xs flex items-center gap-1"><input type="checkbox" checked={stateTotals} onChange={e => setStateTotals(e.target.checked)} />Show state totals instead</label></div>
       </div>
       {f.type ? <ImportCard status={data?.import || null} busy={busy === 'pdf'} onDictionary={downloadDictionary} /> : <RankCard data={data} areaLabel={areaLabel} rankBy={f.rankBy} setRankBy={v => setF({ ...f, rankBy: v })} onOpen={(dot, state) => setSelected({ dot, state })} />}
     </div>
@@ -208,11 +219,11 @@ function Registry() {
         <select aria-label="Tracked" className="h-10 border rounded-md px-2 bg-white text-sm" value={f.tracked} onChange={set('tracked')}><option value="">Tracked or not</option><option value="1">Tracked competitors</option><option value="0">Not tracked yet</option></select>
         <div className="flex flex-wrap gap-3 items-center text-sm lg:col-span-2">
           <label className="flex items-center gap-1"><input type="checkbox" checked={f.hhg} onChange={set('hhg')} />Federal moving authority</label>
-          <label className="flex items-center gap-1"><input type="checkbox" checked={f.likely} onChange={set('likely')} />Movers only</label>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={f.likely} onChange={set('likely')} />Likely movers only</label>
         </div>
       </div>
       <div className="flex flex-wrap gap-2 items-center justify-between">
-        <p className="text-sm text-muted-foreground">{loading ? 'Searching…' : data ? <><b className="text-primary">{data.total.toLocaleString()}</b> companies · {data.totals.units.toLocaleString()} trucks · {data.totals.drivers.toLocaleString()} drivers{data.mode === 'national' ? (data.nationalComplete ? ' nationwide' : ' nationwide (some states still loading: their 300 biggest shown)') : ''}{data.updatedAt ? ` · data from ${new Date(data.updatedAt).toLocaleDateString()}` : ''}{data.mode === 'national' && !f.likely ? ' · Nationwide lists cover likely movers only; choose a state or region to see every household-goods carrier.' : ''}</> : ''}</p>
+        <p className="text-sm text-muted-foreground">{loading ? 'Searching…' : data ? <><b className="text-primary">{data.total.toLocaleString()}</b> companies · {data.totals.units.toLocaleString()} trucks · {data.totals.drivers.toLocaleString()} drivers{data.mode === 'national' ? (data.nationalComplete ? ' nationwide' : ' nationwide (some areas unavailable)') : ''}{data.updatedAt ? ` · data from ${new Date(data.updatedAt).toLocaleDateString()}` : ''}</> : ''}</p>
         <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="outline" disabled={!!busy || !data?.total} onClick={async () => { if (!confirm(`Add the top ${Math.min(300, data?.total || 0)} of this list to your main competitor list?`)) return; const r = await post({ action: 'track', query: queryObject(), limit: 300, tier: 'challenger' }, 'track'); if (r) { toast({ title: `Added ${r.added} to your main list`, description: r.skipped ? `${r.skipped} were already tracked.` : undefined }); void load(); } }}>{busy === 'track' ? 'Adding…' : 'Track top 300 as main list'}</Button>
           <Button size="sm" variant="outline" disabled={!!busy} onClick={async () => { if (!confirm('Add the 100 biggest movers in the country to your legends list? Brokers and non-movers are left out once AI has sorted them.')) return; const r = await post({ action: 'legends' }, 'legends'); if (r) toast({ title: `Added ${r.added} legends`, description: r.skipped ? `${r.skipped} were already tracked.` : undefined }); }}>{busy === 'legends' ? 'Adding…' : 'Set national top 100 as legends'}</Button>
@@ -240,7 +251,7 @@ function Registry() {
           {!!data?.elsewhere?.length && <tr><td colSpan={9} className="p-4 bg-amber-50 text-sm"><p className="font-semibold mb-2">Registered outside this area (a company’s DOT record uses its head office address):</p>
             <ul className="space-y-1">{data.elsewhere.map(r => <li key={r.dot}><button className="underline font-semibold text-primary" onClick={() => setSelected({ dot: r.dot, state: r.state })}>{nice(r.dba || r.name)}</button> <span className="text-muted-foreground">· {nice(r.city)}, {r.state} · {r.units} trucks · USDOT {r.dot}</span></li>)}</ul></td></tr>}
           {!!data?.notListed?.length && <tr><td colSpan={9} className="p-4 bg-slate-50 text-sm"><p className="font-semibold mb-2">Not in the registry. Here’s what the DOT has for that name:</p>
-            <ul className="space-y-2">{data.notListed.map(r => <li key={r.dot}><b>{nice(r.dba || r.name)}</b>{r.dba && r.name ? <span className="text-muted-foreground"> ({nice(r.name)})</span> : null} <span className="text-muted-foreground">· {nice(r.city)}, {r.state} · <a className="underline" href={`https://safer.fmcsa.dot.gov/query.asp?searchtype=ANY&query_type=queryCarrierSnapshot&query_param=USDOT&query_string=${r.dot}`} target="_blank" rel="noreferrer">USDOT {r.dot}</a></span><br /><span className="text-xs">{r.reason}</span></li>)}</ul></td></tr>}
+            <ul className="space-y-2">{data.notListed.map(r => <li key={r.dot}><b>{nice(r.dba || r.name)}</b>{r.dba && r.name ? <span className="text-muted-foreground"> ({nice(r.name)})</span> : null} <span className="text-muted-foreground">· {nice(r.city)}, {r.state} · <a className="underline" href={`https://safer.fmcsa.dot.gov/query.asp?searchtype=ANY&query_type=queryCarrierSnapshot&query_param=USDOT&query_string=${r.dot}`} target="_blank" rel="noreferrer">USDOT {r.dot}</a></span><br /><span className="text-xs">{r.reason} {r.state === 'WA' && <a className="underline" href={`https://www.utc.wa.gov/tl/companies?usdot=${r.dot}`} target="_blank" rel="noreferrer">Check Washington moving permits</a>}</span></li>)}</ul></td></tr>}
         </tbody>
       </table>
     </CardContent></Card>

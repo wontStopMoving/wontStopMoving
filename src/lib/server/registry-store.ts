@@ -21,8 +21,12 @@ const localDir = () => process.env.REGISTRY_LOCAL_DIR;
 async function readFileBytes(name: string): Promise<Buffer | null> {
   if (localDir()) return readFile(path.join(localDir()!, name)).catch(() => null);
   const file = (await adminBucket()).file(`${PREFIX}/${name}`);
-  const [exists] = await file.exists();
-  return exists ? (await file.download())[0] : null;
+  try {
+    return (await file.download())[0];
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 404) return null;
+    throw error;
+  }
 }
 
 async function writeFileBytes(name: string, data: Buffer, contentType: string) {
@@ -35,13 +39,15 @@ export async function loadState(state: string): Promise<Mover[]> {
   if (hit && Date.now() - hit.at < TTL) { cache.delete(state); cache.set(state, hit); return hit.rows; }
   const bytes = await readFileBytes(`${state}.json.gz`);
   const rows: Mover[] = bytes ? JSON.parse(gunzipSync(bytes).toString('utf8')) : [];
-  cache.set(state, { at: Date.now(), rows });
+  if (bytes) cache.set(state, { at: Date.now(), rows });
   while (cache.size > MAX_STATES) cache.delete(cache.keys().next().value!);
   return rows;
 }
 
 export async function saveState(state: string, rows: Mover[]) {
-  await writeFileBytes(`${state}.json.gz`, gzipSync(Buffer.from(JSON.stringify(rows))), 'application/gzip');
+  const bytes = gzipSync(Buffer.from(JSON.stringify(rows)));
+  await writeFileBytes(`${state}.json.gz`, bytes, 'application/gzip');
+  fullSnapshots.set(state, { at: Date.now(), bytes: Promise.resolve(bytes) });
   cache.set(state, { at: Date.now(), rows });
 }
 
@@ -49,6 +55,44 @@ export async function loadStates(states: string[]): Promise<Mover[]> {
   const out: Mover[] = [];
   for (const s of states) out.push(...(await loadState(s)));
   return out;
+}
+
+// Nationwide name/search coverage uses full snapshots. Keep only compressed
+// data cached so a cross-region query needn't retain every parsed document.
+const fullSnapshots = new Map<string, { at: number; bytes: Promise<Buffer | null> }>();
+
+function fullSnapshot(state: string) {
+  const name = `${state}.json.gz`;
+  if (localDir()) return readFileBytes(name);
+  const cached = fullSnapshots.get(state);
+  if (cached && Date.now() - cached.at < TTL) return cached.bytes;
+  const bytes = readFileBytes(name).catch(error => {
+    if (fullSnapshots.get(state)?.bytes === bytes) fullSnapshots.delete(state);
+    throw error;
+  });
+  fullSnapshots.set(state, { at: Date.now(), bytes });
+  return bytes;
+}
+
+export async function scanRegistry<T>(states: string[], filter: (rows: Mover[]) => T[]) {
+  const found: T[] = [];
+  const loaded: string[] = [];
+  for (let index = 0; index < states.length; index += 8) {
+    await Promise.all(states.slice(index, index + 8).map(async state => {
+      const bytes = await fullSnapshot(state).catch(() => null);
+      if (!bytes) return;
+      let rows: Mover[];
+      try {
+        rows = JSON.parse(gunzipSync(bytes).toString('utf8'));
+      } catch (error) {
+        console.error('Could not read registry state snapshot', state, error);
+        return;
+      }
+      found.push(...filter(rows));
+      loaded.push(state);
+    }));
+  }
+  return { rows: found, states: loaded };
 }
 
 /**
