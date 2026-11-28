@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { errorResponse, HttpError, readJson, requireRole } from '@/lib/server/auth';
 import { CARRIER_TYPES, ourFleet, searchRegistry, stateSummaries, type CarrierType, type RegistryQuery } from '@/lib/server/registry-query';
 import { classifyAndSave, classifyPartnerAndSave, enrichmentFor } from '@/lib/server/registry-enrich';
-import { syncState } from '@/lib/server/registry-sync';
+import { notListedFor, syncState } from '@/lib/server/registry-sync';
 import { trackedByDot, trackMovers } from '@/lib/server/registry-track';
 import { loadManifest, loadPartners, loadState } from '@/lib/server/registry-store';
 import { adminDb } from '@/lib/server/firebase-admin';
@@ -98,12 +98,15 @@ export async function GET(req: Request) {
     }
     const summaries = await stateSummaries();
     const type = query.type;
+    // Nothing anywhere in the registry by that name: say why, from the DOT's own record.
+    const elsewhere = 'elsewhere' in result ? result.elsewhere || [] : [];
+    const notListed = !type && query.q && !total && !elsewhere.length && (query.page || 1) === 1 ? await notListedFor(query.q) : [];
     // State totals for the map: likely movers, or the chosen kind of carrier.
     const stateCount = (s: (typeof summaries)[number]) => (!type ? s.likely : type === 'partners' ? s.partners ?? 0 : s.categories?.[type] ?? 0);
     return NextResponse.json({
       needsArea: 'needsArea' in result ? result.needsArea : false, import: params.get('stats') === '1' ? await importStatus() : undefined,
       mode: result.mode, nationalComplete: result.nationalComplete ?? null, total, rows: await decorate(rows), rank: result.rank, explain: result.explain, points: result.points, totals: result.totals, updatedAt: result.updatedAt,
-      synced: summaries.length, jev: jevConfigured(),
+      synced: summaries.length, jev: jevConfigured(), elsewhere: elsewhere.length ? await decorate(elsewhere) : [], notListed,
       stateStats: params.get('stats') === '1' ? summaries.map(s => ({ state: s.state, count: s.count, likely: stateCount(s), units: s.units, center: s.center, updatedAt: s.updatedAt })) : undefined,
     }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) { return errorResponse(error); }

@@ -35,6 +35,7 @@ import { buildLegends, STATE_ZONE, brandOf, revenueRange } from '../src/lib/lege
 import { summarizeSafety, recentTrouble, NATIONAL_OOS } from '../src/lib/safety.ts';
 import { igUsername, ytRef, summarizePosts, combineStats, socialScore, activityOf, metricsFromStats } from '../src/lib/social-stats.ts';
 import { explainRank, sizeParts, saneFleet, sizeScore } from '../src/lib/registry.ts';
+import { matchesLookup } from '../src/lib/account-lookup.ts';
 import { METROS } from '../src/lib/metros.ts';
 import { usableCredit, giftCardAmount, normalizeGiftCode, formatGiftCode, isGiftCodeCore } from '../src/lib/rewards.ts';
 import { diffPrices, describeChange } from '../src/lib/price-watch.ts';
@@ -2306,4 +2307,30 @@ test('a matching cancellation callback can arrive before the refund API saves it
   assert.equal((await webhook(event)).status,200);
   assert.equal((await db.doc(`jobs/${id}`).get()).data().paymentHoldReason,'cancellation_refund');
   assert.notEqual((await db.doc(`jobs/${other}`).get()).data().paymentHold,true);
+});
+
+test('registry name search ignores punctuation and spacing, and finds carriers the mover check left out (#108)', () => {
+  const row = (dot, name, dba, likelyMover = true) => ({ dot, name, dba, mc: '', officer: '', likelyMover, state: 'WA', county: '033', city: 'Seattle', zip: '98101', lat: 47.6, lng: -122.3, units: 3, drivers: 3, added: '2015-01-01', org: '' });
+  const rows = [row('3227005', 'GS Moving Services LLC', 'Eco-Movers'), row('1934023', "Can't Stop Moving LLC", ''), row('9', 'Small Hauler', '', false), row('10', 'Other Co', '')];
+  for (const q of ['ecomovers', 'Eco Movers', 'ECO-MOVERS']) assert.deepEqual(filterMovers(rows, { q }).map(m => m.dot), ['3227005'], q);
+  assert.deepEqual(filterMovers(rows, { q: 'cant stop' }).map(m => m.dot), ['1934023']);
+  // Not a likely mover, but a name search still finds it; the plain list still hides it.
+  assert.deepEqual(filterMovers(rows, { q: 'small hauler' }).map(m => m.dot), ['9']);
+  assert.equal(filterMovers(rows, {}).some(m => m.dot === '9'), false);
+  // DOT numbers still match.
+  assert.deepEqual(filterMovers(rows, { q: '1934023' }).map(m => m.dot), ['1934023']);
+});
+
+test('staff lookup matches phone in any format or last 4, account number, name, company, address and email (#187)', () => {
+  const c = { uid: 'u1', role: 'customer', accountNumber: 'WSM-48213', name: 'Maria Lopez', company: '', email: 'maria@example.com', phones: ['+1 (415) 555-0100'], addresses: ['123 Market St, San Francisco, CA'] };
+  const p = { uid: 'u2', role: 'provider', accountNumber: 'WSM-70001', name: 'Dee Crew', company: 'Bay Movers LLC', email: 'dee@bay.example', phones: ['206-555-7788'], addresses: ['9 Pine Ave, Seattle, WA'] };
+  for (const q of ['(415) 555-0100', '4155550100', '415.555.0100', '0100']) assert.equal(matchesLookup(c, q), 'phone', q);
+  for (const q of ['WSM-48213', 'wsm48213', '48213']) assert.equal(matchesLookup(c, q), 'account', q);
+  assert.equal(matchesLookup(p, '48213'), null);
+  assert.equal(matchesLookup(c, 'lopez maria'), 'name');
+  assert.equal(matchesLookup(c, 'market st'), 'address');
+  assert.equal(matchesLookup(p, 'bay movers'), 'company');
+  assert.equal(matchesLookup(c, 'maria@example.com'), 'email');
+  assert.equal(matchesLookup(c, 'x'), null);
+  assert.equal(matchesLookup(c, 'pine'), null);
 });

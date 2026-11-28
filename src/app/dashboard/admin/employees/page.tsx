@@ -25,6 +25,7 @@ import {
   IdCard
 } from "lucide-react";
 import { useState, useMemo } from "react";
+import { useAccountActivity } from "@/hooks/use-account-activity";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Link from "next/link";
 
@@ -57,6 +58,7 @@ function AdminEmployeesContent() {
   const { data: users, isLoading: usersLoading } = useCollection(usersQuery);
   const { data: profiles, isLoading: profilesLoading } = useCollection(profilesQuery);
 
+  const { accounts } = useAccountActivity((users || []).map(u => u.id));
   const employees = useMemo(() => {
     if (!users || !profiles) return [];
 
@@ -183,6 +185,7 @@ function AdminEmployeesContent() {
                             <span className="flex items-center gap-1.5 min-w-0 truncate"><Mail className="h-3 w-3 shrink-0" /> {employee.email}</span>
                             <span className="flex items-center gap-1.5 shrink-0"><IdCard className="h-3 w-3 shrink-0" /> {employee.employeeId || "No ID Assigned"}</span>
                             <span className="flex items-center gap-1.5 shrink-0"><MapPin className="h-3 w-3 shrink-0" /> {employee.state} ({employee.region})</span>
+                            <span className="shrink-0">Joined {accounts[employee.id]?.createdAt ? new Date(accounts[employee.id].createdAt!).toLocaleDateString() : 'unknown'}</span>
                           </div>
                         </div>
                       </div>

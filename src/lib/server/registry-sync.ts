@@ -180,3 +180,38 @@ export async function runDailyTasks() {
 }
 
 export { loadState };
+
+export type NotListed = { dot: string; name: string; dba: string; city: string; state: string; reason: string };
+
+/**
+ * A name search found nothing in the registry: ask the DOT census directly, so
+ * the page can say why a known company isn't listed (inactive, no household
+ * goods on its filing, ...) instead of showing an empty list (#108).
+ */
+export async function notListedFor(q: string): Promise<NotListed[]> {
+  // Only letters, digits and spaces are kept, so nothing can break out of the quoted pattern.
+  const words = q.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').split(/\s+/).filter(w => w.length > 1).slice(0, 5);
+  if (!words.join('').length || words.join('').length < 3) return [];
+  // Each word in order; "cant"/"wont"/"dont" also match the apostrophe spelling ("CAN'T").
+  const pattern = (ws: string[]) => `%${ws.join('%')}%`;
+  const likes = [...new Set([pattern(words), pattern(words.map(w => w.replace(/NT$/, 'N%T')))])];
+  const qs = new URLSearchParams({
+    $select: 'dot_number,legal_name,dba_name,phy_city,phy_state,status_code,crgo_household',
+    $where: likes.map(l => `upper(legal_name) like '${l}' OR upper(dba_name) like '${l}'`).join(' OR '),
+    $order: 'status_code, dot_number', $limit: '50',
+  });
+  const res = await politeFetch(`${CENSUS}?${qs}`, 20_000).catch(() => null);
+  const rows = res?.ok ? ((await res.json()) as Record<string, string>[]) : [];
+  const key = words.join('');
+  const compact = (s: string | undefined) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return rows
+    .filter(r => compact(r.legal_name).includes(key) || compact(r.dba_name).includes(key))
+    .slice(0, 10)
+    .map(r => ({
+      dot: String(Number(r.dot_number || 0)), name: String(r.legal_name || ''), dba: String(r.dba_name || ''), city: String(r.phy_city || ''), state: String(r.phy_state || ''),
+      reason: r.status_code !== 'A' ? 'Inactive with the DOT, so it isn’t imported. It may operate under another USDOT number or only a state permit.'
+        : r.crgo_household !== 'X' ? 'Its DOT filing doesn’t list household goods, so it isn’t counted as a mover.'
+        : !REGISTRY_AREAS.includes(String(r.phy_state || '')) ? 'Registered outside the areas we import.'
+        : `Active household-goods carrier, but nationwide searches only cover likely movers. Choose ${r.phy_state} to see it.`,
+    }));
+}

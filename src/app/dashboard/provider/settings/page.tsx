@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Lock, User, ShieldAlert } from "lucide-react";
 import { TextPreferences } from '@/components/dashboard/text-preferences';
 import { useToast } from "@/hooks/use-toast";
+import { AccountNumber } from '@/components/account-number';
 
 export default function ProviderSettingsPage() {
   const { user } = useUser();
@@ -21,6 +22,7 @@ export default function ProviderSettingsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Account Settings</h1>
           <p className="text-muted-foreground text-sm mt-1">Manage your account preferences and security settings.</p>
+          <AccountNumber className="mt-1" />
         </div>
         
         <TextPreferences provider />

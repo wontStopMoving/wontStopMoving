@@ -339,3 +339,11 @@ test('feedback, research and shop orders are server-only', async () => {
     await assertFails(setDoc(doc(as('boss'), path), { x: 1 }));
   }
 });
+
+test('account numbers are set server-side only: users cannot add or change their own (#187)', async () => {
+  await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'users/acct-owner'), { role: 'customer', name: 'Owner', accountNumber: 'WSM-11111' }));
+  await assertFails(updateDoc(doc(as('acct-owner'), 'users/acct-owner'), { accountNumber: 'WSM-00001' }));
+  await assertSucceeds(updateDoc(doc(as('acct-owner'), 'users/acct-owner'), { name: 'Owner Two' }));
+  await assertFails(setDoc(doc(as('acct-new'), 'users/acct-new'), { role: 'provider', name: 'New', accountNumber: 'WSM-22222' }));
+  await assertFails(getDoc(doc(as('acct-owner'), 'accountNumbers/WSM-11111')));
+});

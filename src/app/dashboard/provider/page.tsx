@@ -51,6 +51,7 @@ import { collection, query, where, getDocs } from "firebase/firestore";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { AVAILABLE_SERVICES } from "@/lib/services";
+import { AccountNumber } from '@/components/account-number';
 
 function ProviderDashboardContent() {
   const { user } = useUser();
@@ -443,6 +444,7 @@ function ProviderDashboardContent() {
             <p className="text-slate-400 font-medium max-w-lg text-sm">
               Complete your onboarding tasks at your own pace, manage marketplace jobs, and track your 85% Stripe payouts.
             </p>
+            <AccountNumber className="mt-2 !text-slate-300 [&_b]:!text-white" />
           </div>
 
           <div className="space-y-3 min-w-[260px] bg-white/5 p-5 rounded-2xl border border-white/10">

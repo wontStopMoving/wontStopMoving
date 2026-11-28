@@ -122,15 +122,20 @@ export type MoverFilters = {
   org?: string; dots?: Set<string>; excludeDots?: Set<string>;
 };
 
+/** Letters and digits only, so "Eco-Movers", "ECO MOVERS" and "ecomovers" (or "Can't" and "cant") match. */
+export const nameKey = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
 /** Filters registry rows; pass `now` for stable "years in business" in tests. */
 export function filterMovers(rows: Mover[], f: MoverFilters, now = Date.now()): Mover[] {
-  const q = (f.q || '').trim().toUpperCase();
+  const q = (f.q || '').trim().toUpperCase(), qKey = nameKey(q);
   const city = (f.city || '').trim().toUpperCase();
+  // A name search looks at every household-goods carrier, not just likely movers (#108).
+  const likelyOnly = f.likelyOnly !== false && !q;
   return rows.filter(m => {
-    if (f.likelyOnly !== false && !m.likelyMover) return false;
+    if (likelyOnly && !m.likelyMover) return false;
     if (f.area && !f.area.counties.includes(`${m.state}-${m.county}`)) return false;
     if (f.states?.length && !f.states.includes(m.state)) return false;
-    if (q && !`${m.name} ${m.dba} ${m.dot} ${m.mc} ${m.officer}`.toUpperCase().includes(q)) return false;
+    if (q && !`${m.name} ${m.dba} ${m.dot} ${m.mc} ${m.officer}`.toUpperCase().includes(q) && !(qKey.length >= 3 && (nameKey(m.name).includes(qKey) || nameKey(m.dba).includes(qKey)))) return false;
     if (city && m.city.toUpperCase() !== city) return false;
     if (f.zip && !m.zip.startsWith(f.zip)) return false;
     if (f.bbox && (m.lat === null || m.lng === null || m.lat < f.bbox.south || m.lat > f.bbox.north || m.lng < f.bbox.west || m.lng > f.bbox.east)) return false;

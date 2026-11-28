@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ALL_LOCATIONS } from "@/lib/location-data";
 import { User, Mail, Phone, MapPin, Save, ShieldCheck } from "lucide-react";
 import { TextPreferences } from '@/components/dashboard/text-preferences';
+import { AccountNumber } from '@/components/account-number';
 
 export default function CustomerProfilePage() {
   const { user } = useUser();
@@ -80,6 +81,7 @@ export default function CustomerProfilePage() {
         <header>
           <h1 className="text-3xl font-black text-primary uppercase">My <span className="text-accent">Profile</span></h1>
           <p className="text-muted-foreground">Manage your personal information and account settings</p>
+          <AccountNumber className="mt-1" />
         </header>
 
         <TextPreferences />
