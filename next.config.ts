@@ -34,9 +34,6 @@ const nextConfig: NextConfig = {
       { source: '/google.firestore.v1.Firestore/:path*', destination: 'http://127.0.0.1:8180/google.firestore.v1.Firestore/:path*' },
     ];
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   images: {
     remotePatterns: [
       {

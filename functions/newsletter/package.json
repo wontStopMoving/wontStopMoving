@@ -1,0 +1,25 @@
+{
+  "name": "website-newsletter-functions",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sesv2": "3.1173.0",
+    "@aws-sdk/client-sts": "3.1173.0",
+    "firebase-admin": "^14.5.0",
+    "firebase-functions": "^7.4.0",
+    "google-auth-library": "10.9.1",
+    "sns-validator": "^0.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5.9.3"
+  }
+}

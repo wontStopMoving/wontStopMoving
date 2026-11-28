@@ -1,6 +1,6 @@
 name: Auto ship
 
-# Every push to a branch (other than main) opens a pull request into main and
+# On the organization repository, a push to a branch other than main opens a pull request into main and
 # turns on auto-merge: GitHub merges it once the required "Verify" check
 # passes, and merging to main deploys the site. Failing checks never merge.
 #
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   ship:
-    if: ${{ !contains(github.event.head_commit.message, '[no-ship]') && github.event.deleted == false }}
+    if: ${{ !github.event.repository.fork && !contains(github.event.head_commit.message, '[no-ship]') && github.event.deleted == false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:

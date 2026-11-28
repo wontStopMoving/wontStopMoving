@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Newsletter configuration set, signed feedback topic and federated sender for one verified domain.
+
+Parameters:
+  Business:
+    Type: String
+    AllowedValues: [wontstopmoving, amovingservice, w3develops, agentgarden, cracan, findthebabies, jonathanjackson]
+  EnableSending:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  GoogleSubject:
+    Type: String
+    AllowedPattern: '[0-9]{15,30}'
+    Description: Unique numeric ID of the dedicated Google delivery service account.
+  TestRecipient:
+    Type: String
+    AllowedPattern: '[^@\s]+@[^@\s]+'
+  PermitSubscriberDelivery:
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+Mappings:
+  Domains:
+    wontstopmoving: {Name: wontstopmoving.com}
+    amovingservice: {Name: amovingservice.com}
+    w3develops: {Name: w3develops.org}
+    agentgarden: {Name: agentgarden.org}
+    cracan: {Name: cracan.org}
+    findthebabies: {Name: findthebabies.org}
+    jonathanjackson: {Name: jonathanjackson.me}
+
+Conditions:
+  SendingActive: !Equals [!Ref EnableSending, 'true']
+
+  SubscriberDelivery: !Equals [!Ref PermitSubscriberDelivery, 'true']
+
+Resources:
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub '${Business}-newsletter'
+      SendingOptions:
+        SendingEnabled: !If [SendingActive, true, false]
+      ReputationOptions:
+        ReputationMetricsEnabled: false
+  FeedbackTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${Business}-newsletter-events'
+      SignatureVersion: '2'
+  FeedbackTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics: [!Ref FeedbackTopic]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref FeedbackTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${Business}-newsletter'
+  FeedbackDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    DependsOn: FeedbackTopicPolicy
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Name: feedback
+        Enabled: true
+        MatchingEventTypes: [DELIVERY, BOUNCE, COMPLAINT, REJECT, DELIVERY_DELAY]
+        SnsDestination:
+          TopicARN: !Ref FeedbackTopic
+
+  NewsletterWorker:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Business}-ses-newsletter-worker'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: accounts.google.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                accounts.google.com:sub: !Ref GoogleSubject
+                accounts.google.com:aud: !Ref GoogleSubject
+                accounts.google.com:oaud: !Sub '${Business}-ses-newsletter-worker'
+      Policies:
+        - PolicyName: newsletter-send
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource:
+                  - !Sub
+                    - 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${Domain}'
+                    - Domain: !FindInMap [Domains, !Ref Business, Name]
+                  - !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${Business}-newsletter'
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Sub
+                      - 'newsletter@${Domain}'
+                      - Domain: !FindInMap [Domains, !Ref Business, Name]
+                  'Null':
+                    ses:Recipients: 'false'
+                  ForAllValues:StringEquals: !If
+                    - SubscriberDelivery
+                    - !Ref 'AWS::NoValue'
+                    - ses:Recipients:
+                        - !Ref TestRecipient
+                        - success@simulator.amazonses.com
+                        - bounce@simulator.amazonses.com
+                        - complaint@simulator.amazonses.com
+
+Outputs:
+  ConfigurationSetName:
+    Value: !Ref ConfigurationSet
+  FeedbackTopicArn:
+    Value: !Ref FeedbackTopic
+  WorkerRoleArn:
+    Value: !GetAtt NewsletterWorker.Arn
