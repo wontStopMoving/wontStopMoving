@@ -44,7 +44,7 @@ export async function POST(req: Request) {
       }
       return NextResponse.json({ ok: true });
     }
-    const { user, role } = await requireRole(req, ['customer', 'provider', 'agent', 'employee', 'admin']);
+    const { user, role } = await requireRole(req, ['customer', 'provider', 'agent', 'employee', 'admin'], { allowUnapprovedEmployee: true });
     const type = TYPES.find(t => t === body.type) || 'other';
     const message = str(body.message, 4000);
     if (message.length < 5) throw new HttpError(400, 'Tell us a bit more.');
